@@ -5,19 +5,14 @@ Maintainer: Utopia Maintenance Team <pkg-utopia-maintainers@alioth-lists.debian.
 Uploaders: Jeremy Bicha <jbicha@debian.org>
 Build-Depends: debhelper (>= 11),
                libasound2-dev,
-               libavcodec-dev,
-               libavfilter-dev,
-               libavformat-dev,
                libdbus-1-dev,
                libglib2.0-dev,
                libgstreamer1.0-dev,
                libgstreamer-plugins-base1.0-dev,
                libsbc-dev,
-               libsdl2-dev,
                libudev-dev,
                libva-dev,
                libv4l-dev,
-               libx11-dev,
                meson (>= 0.47),
                pkg-config (>= 0.22),
                systemd,
@@ -111,22 +106,6 @@ Description: PipeWire multimedia server
   - Generating graphs for audio and video processing.
  .
  This package contains the server and command-line utilities.
-
-Package: libspa-ffmpeg
-Architecture: linux-any
-Multi-Arch: same
-Depends: ${misc:Depends},
-         ${shlibs:Depends},
-Description: libraries for the PipeWire multimedia server - ffmpeg plugins
- PipeWire is a server and user space API to deal with multimedia
- pipelines. This includes:
- .
-  - Making available sources of video (such as from a capture devices or
-   application provided streams) and multiplexing this with clients.
-  - Accessing sources of video for consumption.
-  - Generating graphs for audio and video processing.
- .
- This package contains the ffmpeg plugins.
 
 Package: gstreamer1.0-pipewire
 Architecture: linux-any

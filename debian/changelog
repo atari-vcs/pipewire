@@ -1,3 +1,8 @@
+pipewire (0.2.5-1co1) apertis; urgency=medium
+
+  * Drop b-d on libav, sdl and x11
+
+ -- Sjoerd Simons <sjoerd.simons@collabora.co.uk>  Mon, 28 Jan 2019 21:25:55 +0100
 pipewire (0.2.5-1) unstable; urgency=medium
 
   [ Jeremy Bicha ]
