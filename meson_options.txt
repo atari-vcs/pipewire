@@ -1,0 +1,16 @@
+option('docs',
+       description: 'Build documentation',
+       type: 'boolean',
+       value: false)
+option('man',
+       description: 'Build manpages',
+       type: 'boolean',
+       value: false)
+option('gstreamer',
+       description: 'Build GStreamer plugins',
+       type: 'feature',
+       value: 'auto')
+option('systemd',
+       description: 'Enable systemd integration',
+       type: 'boolean',
+       value: true)
