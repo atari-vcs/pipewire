@@ -1,0 +1,97 @@
+stages:
+  - container
+  - build
+  - pages
+
+variables:
+  FDO_UPSTREAM_REPO: 'pipewire/pipewire'
+
+# ci-templates as of May 1st 2020
+.templates_sha: &templates_sha 59de540b620c45739871d1a073d76d5521989d11
+
+include:
+  - project: 'freedesktop/ci-templates'
+    ref: *templates_sha
+    file: '/templates/fedora.yml'
+
+.fedora:
+  variables:
+    # Update this tag when you want to trigger a rebuild
+    FDO_DISTRIBUTION_TAG: '2020-05-19.1'
+    FDO_DISTRIBUTION_VERSION: '32'
+    FDO_DISTRIBUTION_PACKAGES: >-
+      alsa-lib-devel
+      bluez-libs-devel
+      dbus-devel
+      doxygen
+      findutils
+      gcc
+      git
+      glib-devel
+      graphviz
+      gstreamer1-devel
+      gstreamer1-plugins-base-devel
+      jack-audio-connection-kit-devel
+      libv4l-devel
+      libva-devel
+      libX11-devel
+      meson
+      pulseaudio-libs-devel
+      sbc-devel
+      SDL2-devel
+      systemd-devel
+      vulkan-loader-devel
+      which
+      xmltoman
+      libsndfile-devel
+
+.build:
+  before_script:
+    # setup the environment
+    - export BUILD_ID="$CI_JOB_NAME"
+    - export PREFIX="$PWD/prefix-$BUILD_ID"
+    - export BUILD_DIR="$PWD/build-$BUILD_ID"
+    - export XDG_RUNTIME_DIR="$(mktemp -p $PWD -d xdg-runtime-XXXXXX)"
+  script:
+    - meson "$BUILD_DIR" . --prefix="$PREFIX"
+        -Ddocs=true -Daudiomixer=true -Daudiotestsrc=true
+        -Dtest=true -Dvideotestsrc=true -Dvolume=true
+    - ninja -C "$BUILD_DIR"
+    - ninja -C "$BUILD_DIR" test
+    - ninja -C "$BUILD_DIR" install
+    - ./check_missing_headers.sh
+  artifacts:
+    name: pipewire-$CI_COMMIT_SHA
+    when: always
+    paths:
+      - build-*/meson-logs
+      - prefix-*
+
+container_fedora:
+  extends:
+    - .fedora
+    - .fdo.container-build@fedora
+  stage: container
+  variables:
+    GIT_STRATEGY: none # no need to pull the whole tree for rebuilding the image
+
+build_on_fedora:
+  extends:
+    - .fedora
+    - .fdo.distribution-image@fedora
+    - .build
+  stage: build
+
+pages:
+  stage: pages
+  dependencies:
+    - build_on_fedora
+  script:
+    - export PREFIX="$PWD/prefix-build_on_fedora"
+    - mkdir public
+    - cp -R $PREFIX/share/doc/pipewire/html/* public/
+  artifacts:
+    paths:
+      - public
+  only:
+    - master

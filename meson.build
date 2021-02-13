@@ -1,7 +1,8 @@
-project('pipewire', 'c',
-  version : '0.2.5',
-  meson_version : '>= 0.47.0',
-  default_options : [ 'warning_level=1',
+project('pipewire', ['c' ],
+  version : '0.3.19',
+  license : 'MIT',
+  meson_version : '>= 0.49.0',
+  default_options : [ 'warning_level=3',
                       'c_std=gnu99',
                       'buildtype=debugoptimized' ])
 
@@ -17,27 +18,162 @@ else
   pipewire_version_nano = 0
 endif
 
-spaversion = '0.1'
-apiversion = '0.2'
-soversion = 1
+spaversion = '0.2'
+apiversion = '0.3'
+soversion = 0
 libversion = '@0@.@1@.0'.format(soversion, pipewire_version_minor.to_int() * 100 + pipewire_version_micro.to_int())
+
+pipewire_name = 'pipewire-@0@'.format(apiversion)
+spa_name = 'spa-@0@'.format(spaversion)
 
 prefix = get_option('prefix')
 pipewire_bindir = join_paths(prefix, get_option('bindir'))
 pipewire_datadir = join_paths(prefix, get_option('datadir'))
 pipewire_libdir = join_paths(prefix, get_option('libdir'))
+pipewire_libexecdir = join_paths(prefix, get_option('libexecdir'))
 pipewire_localedir = join_paths(prefix, get_option('localedir'))
 pipewire_sysconfdir = join_paths(prefix, get_option('sysconfdir'))
 
 pipewire_configdir = join_paths(pipewire_sysconfdir, 'pipewire')
-modules_install_dir = join_paths(pipewire_libdir, 'pipewire-@0@'.format(apiversion))
-spa_plugindir = join_paths(pipewire_libdir, 'spa')
+modules_install_dir = join_paths(pipewire_libdir, pipewire_name)
+
+if host_machine.system() == 'linux'
+  # glibc ld.so interprets ${LIB} in a library loading path with an
+  # appropriate value for the current architecture, typically something
+  # like lib, lib64 or lib/x86_64-linux-gnu.
+  # This allows the same pw-jack script to work for both 32- and 64-bit
+  # applications on biarch/multiarch distributions, by setting something
+  # like LD_LIBRARY_PATH='/usr/${LIB}/pipewire-0.3/jack'.
+  # Note that ${LIB} is a special token expanded by the runtime linker,
+  # not an environment variable, and must be passed through literally.
+  modules_install_dir_dlopen = join_paths(prefix, '${LIB}', pipewire_name)
+else
+  modules_install_dir_dlopen = modules_install_dir
+endif
+
+spa_plugindir = join_paths(pipewire_libdir, spa_name)
+
+alsadatadir = join_paths(pipewire_datadir, 'alsa-card-profile', 'mixer')
+
+pipewire_headers_dir = join_paths(pipewire_name, 'pipewire')
 
 gnome = import('gnome')
 pkgconfig = import('pkgconfig')
 
 cc = meson.get_compiler('c')
 
+common_flags = [
+  '-fvisibility=hidden',
+  '-Werror=suggest-attribute=format',
+  '-Wsign-compare',
+  '-Wpointer-arith',
+  '-Wpointer-sign',
+  '-Wformat',
+  '-Wformat-security',
+  '-Wimplicit-fallthrough',
+  '-Wmissing-braces',
+  '-Wtype-limits',
+  '-Wvariadic-macros',
+  '-Wno-missing-field-initializers',
+  '-Wno-unused-parameter',
+  '-Wno-pedantic',
+  '-Wold-style-declaration',
+  '-Wunused-result',
+]
+
+cc_flags = common_flags + [
+  '-DFASTPATH',
+# '-DSPA_DEBUG_MEMCPY',
+]
+add_project_arguments(cc.get_supported_arguments(cc_flags), language: 'c')
+
+have_cpp = add_languages('cpp', required : false)
+
+if have_cpp
+  cxx = meson.get_compiler('cpp')
+  cxx_flags = common_flags
+  add_project_arguments(cxx.get_supported_arguments(cxx_flags), language: 'cpp')
+endif
+
+sse_args = '-msse'
+sse2_args = '-msse2'
+ssse3_args = '-mssse3'
+sse41_args = '-msse4.1'
+fma_args = '-mfma'
+avx_args = '-mavx'
+avx2_args = '-mavx2'
+
+have_sse = cc.has_argument(sse_args)
+have_sse2 = cc.has_argument(sse2_args)
+have_ssse3 = cc.has_argument(ssse3_args)
+have_sse41 = cc.has_argument(sse41_args)
+have_fma = cc.has_argument(fma_args)
+have_avx = cc.has_argument(avx_args)
+have_avx2 = cc.has_argument(avx2_args)
+
+have_neon = false
+if host_machine.cpu_family() == 'aarch64'
+  if cc.compiles('''
+    #include <arm_neon.h>
+    int main () {
+      float *s;
+      asm volatile(
+	"      ld1 { v0.4s }, [%[s]], #16\n"
+        "      fcvtzs v0.4s, v0.4s, #31\n"
+	: [s] "+r" (s) : :);
+    }
+    ''',
+    name : 'aarch64 Neon Support')
+      neon_args = []
+      have_neon = true
+
+  endif
+elif cc.has_argument('-mfpu=neon')
+  if cc.compiles('''
+    #include <arm_neon.h>
+    int main () {
+      float *s;
+      asm volatile(
+        "      vld1.32 { q0 }, [%[s]]!\n"
+        "      vcvt.s32.f32 q0, q0, #31\n"
+	: [s] "+r" (s) : :);
+    }
+    ''',
+    args: '-mfpu=neon',
+    name : 'arm Neon Support')
+      neon_args = ['-mfpu=neon']
+      have_neon = true
+  endif
+endif
+
+libatomic = cc.find_library('atomic', required : false)
+
+test_8_byte_atomic = '''
+#include <stdint.h>
+
+int main(void)
+{
+  int64_t eight;
+  __atomic_store_n(&eight, 123, __ATOMIC_SEQ_CST);
+  return 0;
+}
+'''
+
+# We currently assume that libatomic is unnecessary for 4-byte atomic
+# operations on any reasonable architecture.
+if cc.links(
+  test_8_byte_atomic,
+  name : '8-byte __atomic_store_n without libatomic')
+  atomic_dep = dependency('', required: false)
+elif cc.links(
+  test_8_byte_atomic,
+  dependencies : libatomic,
+  name : '8-byte __atomic_store_n with libatomic')
+  atomic_dep = libatomic
+elif get_option('pipewire-jack')
+  # Currently only required for the JACK backend
+  error('8-byte atomic operations are required for pipewire-jack')
+endif
 
 cdata = configuration_data()
 cdata.set('PIPEWIRE_VERSION_MAJOR', pipewire_version_major)
@@ -49,7 +185,7 @@ cdata.set('PIPEWIRE_DATADIR', '"@0@"'.format(pipewire_datadir))
 cdata.set('LOCALEDIR', '"@0@"'.format(pipewire_localedir))
 cdata.set('LIBDIR', '"@0@"'.format(pipewire_libdir))
 cdata.set('GETTEXT_PACKAGE', '"pipewire"')
-cdata.set('PIPEWIRE_LICENSE', '"LGPL"')
+cdata.set('PIPEWIRE_LICENSE', '"MIT"')
 cdata.set('PIPEWIRE_PACKAGE_ORIGIN', '"Unknown package origin"')
 cdata.set('PIPEWIRE_PACKAGE_NAME', '"PipeWire source release"')
 cdata.set('PACKAGE', '"pipewire"')
@@ -64,12 +200,15 @@ cdata.set('VERSION', '"@0@"'.format(pipewire_version))
 cdata.set('PLUGINDIR', '"@0@"'.format(spa_plugindir))
 # FIXME: --with-memory-alignment],[8,N,malloc,pagesize (default is 32)]) option
 cdata.set('MEMORY_ALIGNMENT_MALLOC', 1)
+cdata.set_quoted('PA_ALSA_PATHS_DIR', join_paths(alsadatadir, 'paths'))
+cdata.set_quoted('PA_ALSA_PROFILE_SETS_DIR', join_paths(alsadatadir, 'profile-sets'))
 
 
 check_headers = [['dlfcn.h','HAVE_DLFCN_H'],
   ['inttypes.h', 'HAVE_INTTYPES_H'],
   ['memory.h', 'HAVE_MEMORY_H'],
   ['poll.h', 'HAVE_POLL_H'],
+  ['stddef.h', 'HAVE_STDDEF_H'],
   ['stdint.h', 'HAVE_STDINT_H'],
   ['stdio_ext.h', 'HAVE_STDIO_EXT_H'],
   ['strings.h', 'HAVE_STRINGS_H'],
@@ -84,6 +223,7 @@ check_headers = [['dlfcn.h','HAVE_DLFCN_H'],
   ['sys/types.h', 'HAVE_SYS_TYPES_H'],
   ['sys/utsname.h', 'HAVE_SYS_UTSNAME_H'],
   ['sys/wait.h', 'HAVE_SYS_WAIT_H'],
+  ['pwd.h', 'HAVE_PWD_H'],
   ['ucontext.h', 'HAVE_UCONTEXT_H'],
   ['unistd.h', 'HAVE_UNISTD_H'],
   ['valgrind/valgrind.h', 'HAVE_VALGRIND_VALGRIND_H'],
@@ -113,8 +253,12 @@ if cc.has_function('clock_gettime', prefix : '#include <time.h>')
   cdata.set('HAVE_CLOCK_GETTIME', 1)
 endif
 
-if cc.has_type('ptrdiff_t')
-  cdata.set('HAVE_PTRDIFF_T')
+if cc.has_type('ptrdiff_t', prefix : '#include <stddef.h>')
+  cdata.set('HAVE_PTRDIFF_T', 1)
+endif
+
+if cc.has_function('strndupa', prefix : '#include <string.h>', args : [ '-D_GNU_SOURCE' ])
+  cdata.set('HAVE_STRNDUPA', 1)
 endif
 
 if cc.has_function('mkstemp', prefix : '#include <stdlib.h>')
@@ -129,9 +273,27 @@ if get_option('systemd')
   systemd = dependency('systemd', required: false)
   systemd_dep = dependency('libsystemd', required: false)
   if systemd.found() and systemd_dep.found()
-    cdata.set('HAVE_SYSTEMD_DAEMON', 1)
+    cdata.set('HAVE_SYSTEMD', 1)
   else
-    warning('Systemd integration was enabled, but systemd is not available')
+    warning('systemd integration was enabled, but systemd is not available')
+  endif
+endif
+
+if get_option('bluez5')
+  if get_option('bluez5-backend-native')
+    cdata.set('HAVE_BLUEZ_5_BACKEND_NATIVE', 1)
+  endif
+  if get_option('bluez5-backend-ofono')
+    cdata.set('HAVE_BLUEZ_5_BACKEND_OFONO', 1)
+  endif
+  if get_option('bluez5-backend-hsphfpd')
+    cdata.set('HAVE_BLUEZ_5_BACKEND_HSPHFPD', 1)
+  endif
+endif
+
+if get_option('gstreamer')
+  if get_option('gstreamer-device-provider')
+    cdata.set('HAVE_GSTREAMER_DEVICE_PROVIDER', 1)
   endif
 endif
 
@@ -143,6 +305,8 @@ configinc = include_directories('.')
 pipewire_inc = include_directories('src')
 
 makedata = configuration_data()
+  makedata.set('BUILD_ROOT', meson.build_root())
+  makedata.set('SOURCE_ROOT', meson.source_root())
   makedata.set('VERSION', pipewire_version)
 if version_arr.length() == 4
   makedata.set('TAG', 'HEAD')
@@ -160,30 +324,51 @@ rt_lib = cc.find_library('rt', required : false) # clock_gettime
 dl_lib = cc.find_library('dl', required : false)
 pthread_lib = dependency('threads')
 dbus_dep = dependency('dbus-1')
+sdl_dep = dependency('sdl2', required : false)
+ncurses_dep = dependency('ncurses', required : false)
+sndfile_dep = dependency('sndfile', version : '>= 1.0.20', required : false)
 
-if not get_option('gstreamer').disabled()
-  build_gst = true
-  glib_dep = [dependency('glib-2.0', version : '>=2.32.0', required: get_option('gstreamer'))]
-  gobject_dep = [dependency('gobject-2.0', required: get_option('gstreamer'))]
-  gmodule_dep = [dependency('gmodule-2.0', required: get_option('gstreamer'))]
-  gio_dep = [dependency('gio-2.0', required: get_option('gstreamer')), dependency('gio-unix-2.0', required: get_option('gstreamer'))]
-  gst_dep = [dependency('gstreamer-1.0', required: get_option('gstreamer')),
-             dependency('gstreamer-plugins-base-1.0', required: get_option('gstreamer')),
-             dependency('gstreamer-video-1.0', required: get_option('gstreamer')),
-             dependency('gstreamer-audio-1.0', required: get_option('gstreamer')),
-             dependency('gstreamer-allocators-1.0', required: get_option('gstreamer')),]
-  foreach dep: glib_dep + gobject_dep + gio_dep + gst_dep
-    if build_gst and not dep.found()
-      build_gst = false
-      message('@0@ not found, disabling GStreamer'.format(dep))
-    endif
-  endforeach
-else
-  build_gst = false
+if get_option('gstreamer')
+  glib_dep = dependency('glib-2.0', version : '>=2.32.0')
 endif
+
+if get_option('gstreamer')
+  gobject_dep = dependency('gobject-2.0')
+  gmodule_dep = dependency('gmodule-2.0')
+  gio_dep = [dependency('gio-2.0'), dependency('gio-unix-2.0')]
+  gst_dep = [dependency('gstreamer-1.0', version : '>= 1.10.0'),
+             dependency('gstreamer-plugins-base-1.0'),
+             dependency('gstreamer-video-1.0'),
+             dependency('gstreamer-audio-1.0'),
+             dependency('gstreamer-allocators-1.0'),]
+endif
+
+# On FreeBSD, epoll-shim library is required for eventfd() and timerfd()
+epoll_shim_dep = (build_machine.system() == 'freebsd'
+    ? dependency('epoll-shim', required: true)
+    : dependency('', required: false))
+
+alsa_dep = (get_option('pipewire-alsa')
+    ? dependency('alsa', version : '>=1.1.7')
+    : dependency('', required: false))
+
+installed_tests_metadir = join_paths(pipewire_datadir, 'installed-tests', pipewire_name)
+installed_tests_execdir = join_paths(pipewire_libexecdir, 'installed-tests', pipewire_name)
+installed_tests_enabled = get_option('installed_tests')
+installed_tests_template = files('template.test.in')
 
 subdir('spa')
 subdir('src')
+
+if get_option('pipewire-jack')
+  jack_dep = dependency('jack', version : '>= 1.9.10')
+  subdir('pipewire-jack/src')
+endif
+
+if get_option('pipewire-alsa')
+  subdir('pipewire-alsa/alsa-plugins')
+  subdir('pipewire-alsa/conf')
+endif
 
 if get_option('docs')
   doxygen = find_program('doxygen', required : false)
@@ -204,4 +389,5 @@ if get_option('man')
 endif
 
 setenv = find_program('pw-uninstalled.sh')
-run_target('uninstalled', command : [setenv, '-b@0@'.format(meson.build_root())])
+run_target('pw-uninstalled', command : [setenv,
+    '-b@0@'.format(meson.build_root()), '-v@0@'.format(pipewire_version)])

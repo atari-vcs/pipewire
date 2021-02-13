@@ -1,26 +1,36 @@
 /* PipeWire
- * Copyright (C) 2016 Wim Taymans <wim.taymans@gmail.com>
  *
- * This library is free software; you can redistribute it and/or
- * modify it under the terms of the GNU Library General Public
- * License as published by the Free Software Foundation; either
- * version 2 of the License, or (at your option) any later version.
+ * Copyright © 2018 Wim Taymans
  *
- * This library is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * Library General Public License for more details.
+ * Permission is hereby granted, free of charge, to any person obtaining a
+ * copy of this software and associated documentation files (the "Software"),
+ * to deal in the Software without restriction, including without limitation
+ * the rights to use, copy, modify, merge, publish, distribute, sublicense,
+ * and/or sell copies of the Software, and to permit persons to whom the
+ * Software is furnished to do so, subject to the following conditions:
  *
- * You should have received a copy of the GNU Library General Public
- * License along with this library; if not, write to the
- * Free Software Foundation, Inc., 51 Franklin St, Fifth Floor,
- * Boston, MA 02110-1301, USA.
+ * The above copyright notice and this permission notice (including the next
+ * paragraph) shall be included in all copies or substantial portions of the
+ * Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
+ * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+ * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+ * DEALINGS IN THE SOFTWARE.
  */
 
 #include <errno.h>
 
+#include <spa/debug/types.h>
+
 #include <pipewire/protocol.h>
 #include <pipewire/private.h>
+#include <pipewire/type.h>
+
+#define NAME "protocol"
 
 /** \cond */
 struct impl {
@@ -30,11 +40,11 @@ struct impl {
 struct marshal {
 	struct spa_list link;
 	const struct pw_protocol_marshal *marshal;
-	uint32_t type;
 };
 /** \endcond */
 
-struct pw_protocol *pw_protocol_new(struct pw_core *core,
+SPA_EXPORT
+struct pw_protocol *pw_protocol_new(struct pw_context *context,
 				    const char *name,
 				    size_t user_data_size)
 {
@@ -44,7 +54,7 @@ struct pw_protocol *pw_protocol_new(struct pw_core *core,
 	if (protocol == NULL)
 		return NULL;
 
-	protocol->core = core;
+	protocol->context = context;
 	protocol->name = strdup(name);
 
 	spa_list_init(&protocol->marshal_list);
@@ -55,46 +65,58 @@ struct pw_protocol *pw_protocol_new(struct pw_core *core,
 	if (user_data_size > 0)
 		protocol->user_data = SPA_MEMBER(protocol, sizeof(struct impl), void);
 
-	spa_list_append(&core->protocol_list, &protocol->link);
+	spa_list_append(&context->protocol_list, &protocol->link);
 
-	pw_log_debug("protocol %p: Created protocol %s", protocol, name);
+	pw_log_debug(NAME" %p: Created protocol %s", protocol, name);
 
 	return protocol;
 }
 
+SPA_EXPORT
+struct pw_context *pw_protocol_get_context(struct pw_protocol *protocol)
+{
+	return protocol->context;
+}
+
+SPA_EXPORT
 void *pw_protocol_get_user_data(struct pw_protocol *protocol)
 {
 	return protocol->user_data;
 }
 
+SPA_EXPORT
 const struct pw_protocol_implementaton *
 pw_protocol_get_implementation(struct pw_protocol *protocol)
 {
 	return protocol->implementation;
 }
 
+SPA_EXPORT
 const void *
 pw_protocol_get_extension(struct pw_protocol *protocol)
 {
 	return protocol->extension;
 }
 
+SPA_EXPORT
 void pw_protocol_destroy(struct pw_protocol *protocol)
 {
 	struct impl *impl = SPA_CONTAINER_OF(protocol, struct impl, this);
 	struct marshal *marshal, *t1;
-	struct pw_protocol_server *server, *t2;
-	struct pw_protocol_client *client, *t3;
+	struct pw_protocol_server *server;
+	struct pw_protocol_client *client;
 
-	pw_log_debug("protocol %p: destroy", protocol);
-	pw_protocol_events_destroy(protocol);
+	pw_log_debug(NAME" %p: destroy", protocol);
+	pw_protocol_emit_destroy(protocol);
+
+	spa_hook_list_clean(&protocol->listener_list);
 
 	spa_list_remove(&protocol->link);
 
-	spa_list_for_each_safe(server, t2, &protocol->server_list, link)
+	spa_list_consume(server, &protocol->server_list, link)
 		pw_protocol_server_destroy(server);
 
-	spa_list_for_each_safe(client, t3, &protocol->client_list, link)
+	spa_list_consume(client, &protocol->client_list, link)
 		pw_protocol_client_destroy(client);
 
 	spa_list_for_each_safe(marshal, t1, &protocol->marshal_list, link)
@@ -105,6 +127,7 @@ void pw_protocol_destroy(struct pw_protocol *protocol)
 	free(impl);
 }
 
+SPA_EXPORT
 void pw_protocol_add_listener(struct pw_protocol *protocol,
                               struct spa_hook *listener,
                               const struct pw_protocol_events *events,
@@ -113,6 +136,7 @@ void pw_protocol_add_listener(struct pw_protocol *protocol,
 	spa_hook_list_append(&protocol->listener_list, listener, events, data);
 }
 
+SPA_EXPORT
 int
 pw_protocol_add_marshal(struct pw_protocol *protocol,
 			const struct pw_protocol_marshal *marshal)
@@ -121,38 +145,41 @@ pw_protocol_add_marshal(struct pw_protocol *protocol,
 
 	impl = calloc(1, sizeof(struct marshal));
 	if (impl == NULL)
-		return -ENOMEM;
+		return -errno;
 
 	impl->marshal = marshal;
-	impl->type = spa_type_map_get_id (protocol->core->type.map, marshal->type);
 
 	spa_list_append(&protocol->marshal_list, &impl->link);
 
-	pw_log_debug("Add marshal %s:%d to protocol %s", marshal->type, marshal->version,
-			protocol->name);
+	pw_log_debug(NAME" %p: Add marshal %s/%d to protocol %s", protocol,
+			marshal->type, marshal->version, protocol->name);
 
 	return 0;
 }
 
+SPA_EXPORT
 const struct pw_protocol_marshal *
-pw_protocol_get_marshal(struct pw_protocol *protocol, uint32_t type)
+pw_protocol_get_marshal(struct pw_protocol *protocol, const char *type, uint32_t version, uint32_t flags)
 {
 	struct marshal *impl;
 
-	if (protocol == NULL)
-		return NULL;
-
 	spa_list_for_each(impl, &protocol->marshal_list, link) {
-		if (impl->type == type)
+		if (strcmp(impl->marshal->type, type) == 0 &&
+		    impl->marshal->version == version &&
+		    (impl->marshal->flags & flags) == flags)
                         return impl->marshal;
         }
+	pw_log_debug(NAME" %p: No marshal %s/%d for protocol %s", protocol,
+			type, version, protocol->name);
 	return NULL;
 }
 
-struct pw_protocol *pw_core_find_protocol(struct pw_core *core, const char *name)
+SPA_EXPORT
+struct pw_protocol *pw_context_find_protocol(struct pw_context *context, const char *name)
 {
 	struct pw_protocol *protocol;
-	spa_list_for_each(protocol, &core->protocol_list, link) {
+
+	spa_list_for_each(protocol, &context->protocol_list, link) {
 		if (strcmp(protocol->name, name) == 0)
 			return protocol;
 	}
