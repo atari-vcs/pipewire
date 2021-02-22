@@ -1,3 +1,10 @@
+pipewire (0.2.5-1co2) apertis; urgency=medium
+
+  [ Ritesh Raj Sarraf ]
+  * debian/apertis/component: Set to target
+
+ -- Emanuele Aina <emanuele.aina@collabora.com>  Mon, 22 Feb 2021 01:26:27 +0000
+
 pipewire (0.2.5-1co1) apertis; urgency=medium
 
   * Drop b-d on libav, sdl and x11
