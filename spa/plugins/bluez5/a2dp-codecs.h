@@ -26,12 +26,19 @@
 #define BLUEALSA_A2DPCODECS_H_
 
 #include <stdint.h>
+#include <stddef.h>
+
+#include <spa/param/audio/format.h>
+#include <spa/pod/pod.h>
+#include <spa/pod/builder.h>
 
 #define A2DP_CODEC_SBC			0x00
 #define A2DP_CODEC_MPEG12		0x01
 #define A2DP_CODEC_MPEG24		0x02
 #define A2DP_CODEC_ATRAC		0x03
 #define A2DP_CODEC_VENDOR		0xFF
+
+#define A2DP_MAX_CAPS_SIZE		254
 
 /* customized 16-bit vendor extension */
 #define A2DP_CODEC_VENDOR_APTX		0x4FFF
@@ -58,8 +65,8 @@
 #define SBC_ALLOCATION_LOUDNESS		(1 << 0)
 #define SBC_ALLOCATION_SNR		(1 << 1)
 
-#define MIN_BITPOOL 2
-#define MAX_BITPOOL 64
+#define SBC_MIN_BITPOOL 2
+#define SBC_MAX_BITPOOL 64
 
 #define MPEG_CHANNEL_MODE_JOINT_STEREO	(1 << 0)
 #define MPEG_CHANNEL_MODE_STEREO	(1 << 1)
@@ -142,23 +149,49 @@
 #define APTX_VENDOR_ID			0x0000004f
 #define APTX_CODEC_ID			0x0001
 
-#define APTX_CHANNEL_MODE_MONO		0x08
-#define APTX_CHANNEL_MODE_DUAL_CHANNEL	0x04
+#define APTX_CHANNEL_MODE_MONO		0x01
 #define APTX_CHANNEL_MODE_STEREO	0x02
-#define APTX_CHANNEL_MODE_JOINT_STEREO	0x01
 
 #define APTX_SAMPLING_FREQ_16000	0x08
 #define APTX_SAMPLING_FREQ_32000	0x04
 #define APTX_SAMPLING_FREQ_44100	0x02
 #define APTX_SAMPLING_FREQ_48000	0x01
 
+#define APTX_HD_VENDOR_ID               0x000000D7
+#define APTX_HD_CODEC_ID                0x0024
+
+#define APTX_HD_CHANNEL_MODE_MONO       0x1
+#define APTX_HD_CHANNEL_MODE_STEREO     0x2
+
+#define APTX_HD_SAMPLING_FREQ_16000     0x8
+#define APTX_HD_SAMPLING_FREQ_32000     0x4
+#define APTX_HD_SAMPLING_FREQ_44100     0x2
+#define APTX_HD_SAMPLING_FREQ_48000     0x1
+
 #define LDAC_VENDOR_ID			0x0000012d
 #define LDAC_CODEC_ID			0x00aa
+
+#define LDAC_CHANNEL_MODE_MONO		0x04
+#define LDAC_CHANNEL_MODE_DUAL_CHANNEL	0x02
+#define LDAC_CHANNEL_MODE_STEREO	0x01
+
+#define LDAC_SAMPLING_FREQ_44100	0x20
+#define LDAC_SAMPLING_FREQ_48000	0x10
+#define LDAC_SAMPLING_FREQ_88200	0x08
+#define LDAC_SAMPLING_FREQ_96000	0x04
+#define LDAC_SAMPLING_FREQ_176400	0x02
+#define LDAC_SAMPLING_FREQ_192000	0x01
 
 typedef struct {
 	uint32_t vendor_id;
 	uint16_t codec_id;
 } __attribute__ ((packed)) a2dp_vendor_codec_t;
+
+typedef struct {
+	a2dp_vendor_codec_t info;
+	uint8_t frequency;
+	uint8_t channel_mode;
+} __attribute__ ((packed)) a2dp_ldac_t;
 
 #if __BYTE_ORDER == __LITTLE_ENDIAN
 
@@ -202,8 +235,10 @@ typedef struct {
 
 typedef struct {
 	a2dp_vendor_codec_t info;
-	uint8_t unknown[2];
-} __attribute__ ((packed)) a2dp_ldac_t;
+	uint8_t channel_mode:4;
+	uint8_t frequency:4;
+	uint32_t rfa;
+} __attribute__ ((packed)) a2dp_aptx_hd_t;
 
 #elif __BYTE_ORDER == __BIG_ENDIAN
 
@@ -247,8 +282,11 @@ typedef struct {
 
 typedef struct {
 	a2dp_vendor_codec_t info;
-	uint8_t unknown[2];
-} __attribute__ ((packed)) a2dp_ldac_t;
+	uint8_t frequency:4;
+	uint8_t channel_mode:4;
+	uint32_t rfa;
+} __attribute__ ((packed)) a2dp_aptx_hd_t;
+
 
 #else
 #error "Unknown byte order"
@@ -284,15 +322,56 @@ static inline int a2dp_sbc_get_frequency(a2dp_sbc_t *config)
         }
 }
 
-const a2dp_sbc_t bluez_a2dp_sbc;
-#if ENABLE_MP3
-const a2dp_mpeg_t bluez_a2dp_mpeg;
-#endif
-#if ENABLE_AAC
-const a2dp_aac_t bluez_a2dp_aac;
-#endif
-#if ENABLE_APTX
-const a2dp_aptx_t bluez_a2dp_aptx;
-#endif
+struct a2dp_codec_handle;
+
+struct a2dp_codec {
+	uint32_t flags;
+
+	uint8_t codec_id;
+	a2dp_vendor_codec_t vendor;
+
+	const char *name;
+	const char *description;
+
+	const int send_fill_frames;
+	const int recv_fill_frames;
+
+	int (*fill_caps) (const struct a2dp_codec *codec, uint32_t flags,
+			uint8_t caps[A2DP_MAX_CAPS_SIZE]);
+	int (*select_config) (const struct a2dp_codec *codec, uint32_t flags,
+			const void *caps, size_t caps_size,
+			const struct spa_audio_info *info, uint8_t config[A2DP_MAX_CAPS_SIZE]);
+	int (*enum_config) (const struct a2dp_codec *codec,
+			const void *caps, size_t caps_size, uint32_t id, uint32_t idx,
+			struct spa_pod_builder *builder, struct spa_pod **param);
+
+	void *(*init) (const struct a2dp_codec *codec, uint32_t flags, void *config, size_t config_size,
+			const struct spa_audio_info *info, size_t mtu);
+	void (*deinit) (void *data);
+
+	int (*get_block_size) (void *data);
+	int (*get_num_blocks) (void *data);
+
+	int (*abr_process) (void *data, size_t unsent);
+
+	int (*start_encode) (void *data,
+		void *dst, size_t dst_size, uint16_t seqnum, uint32_t timestamp);
+	int (*encode) (void *data,
+		const void *src, size_t src_size,
+		void *dst, size_t dst_size,
+		size_t *dst_out);
+
+	int (*start_decode) (void *data,
+		const void *src, size_t src_size, uint16_t *seqnum, uint32_t *timestamp);
+	int (*decode) (void *data,
+		const void *src, size_t src_size,
+		void *dst, size_t dst_size,
+		size_t *dst_out);
+
+	int (*reduce_bitpool) (void *data);
+	int (*increase_bitpool) (void *data);
+};
+
+extern const struct a2dp_codec **a2dp_codecs;
 
 #endif
