@@ -1,3 +1,10 @@
+pipewire (0.3.19-4apertis1) apertis; urgency=medium
+
+  * Sync updates from Debian Bullseye
+  * Continue to drop b-d on libav, sdl and x11
+
+ -- Ritesh Raj Sarraf <ritesh.sarraf@collabora.com>  Thu, 18 Mar 2021 22:29:04 +0530
+
 pipewire (0.3.19-4) unstable; urgency=medium
 
   * Team upload
@@ -278,6 +285,7 @@ pipewire (0.2.5-1co1) apertis; urgency=medium
   * Drop b-d on libav, sdl and x11
 
  -- Sjoerd Simons <sjoerd.simons@collabora.co.uk>  Mon, 28 Jan 2019 21:25:55 +0100
+
 pipewire (0.2.5-1) unstable; urgency=medium
 
   [ Jeremy Bicha ]
