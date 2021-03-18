@@ -165,6 +165,7 @@ Description: audio and video processing engine multimedia server
  This metapackage makes PipeWire available for programs of the same
  architecture, and provides the systemd user service necessary to run
  pipewire on-demand.
+
 Package: pipewire-bin
 Section: video
 Architecture: linux-any
