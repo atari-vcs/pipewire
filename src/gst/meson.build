@@ -1,15 +1,20 @@
 pipewire_gst_sources = [
   'gstpipewire.c',
+  'gstpipewirecore.c',
   'gstpipewireclock.c',
-  'gstpipewiredeviceprovider.c',
   'gstpipewireformat.c',
   'gstpipewirepool.c',
   'gstpipewiresink.c',
   'gstpipewiresrc.c',
 ]
 
+if get_option('gstreamer-device-provider')
+  pipewire_gst_sources += [ 'gstpipewiredeviceprovider.c' ]
+endif
+
 pipewire_gst_headers = [
   'gstpipewireclock.h',
+  'gstpipewirecore.h',
   'gstpipewiredeviceprovider.h',
   'gstpipewireformat.h',
   'gstpipewirepool.h',
@@ -19,6 +24,7 @@ pipewire_gst_headers = [
 
 pipewire_gst_c_args = [
   '-DHAVE_CONFIG_H',
+  '-D_GNU_SOURCE',
 ]
 
 pipewire_gst = shared_library('gstpipewire',

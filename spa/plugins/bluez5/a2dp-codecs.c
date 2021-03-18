@@ -10,32 +10,6 @@
 
 #include "a2dp-codecs.h"
 
-const a2dp_sbc_t bluez_a2dp_sbc = {
-	.frequency =
-		SBC_SAMPLING_FREQ_16000 |
-		SBC_SAMPLING_FREQ_32000 |
-		SBC_SAMPLING_FREQ_44100 |
-		SBC_SAMPLING_FREQ_48000,
-	.channel_mode =
-		SBC_CHANNEL_MODE_MONO |
-		SBC_CHANNEL_MODE_DUAL_CHANNEL |
-		SBC_CHANNEL_MODE_STEREO |
-		SBC_CHANNEL_MODE_JOINT_STEREO,
-	.block_length =
-		SBC_BLOCK_LENGTH_4 |
-		SBC_BLOCK_LENGTH_8 |
-		SBC_BLOCK_LENGTH_12 |
-		SBC_BLOCK_LENGTH_16,
-	.subbands =
-		SBC_SUBBANDS_4 |
-		SBC_SUBBANDS_8,
-	.allocation_method =
-		SBC_ALLOCATION_SNR |
-		SBC_ALLOCATION_LOUDNESS,
-	.min_bitpool = MIN_BITPOOL,
-	.max_bitpool = MAX_BITPOOL,
-};
-
 #if ENABLE_MP3
 const a2dp_mpeg_t bluez_a2dp_mpeg = {
 	.layer =
@@ -76,48 +50,36 @@ const a2dp_mpeg_t bluez_a2dp_mpeg = {
 };
 #endif
 
+extern struct a2dp_codec a2dp_codec_sbc;
+#if ENABLE_LDAC
+extern struct a2dp_codec a2dp_codec_ldac;
+#endif
 #if ENABLE_AAC
-const a2dp_aac_t bluez_a2dp_aac = {
-	.object_type =
-		/* NOTE: AAC Long Term Prediction and AAC Scalable are
-		 *       not supported by the FDK-AAC library. */
-		AAC_OBJECT_TYPE_MPEG2_AAC_LC |
-		AAC_OBJECT_TYPE_MPEG4_AAC_LC,
-	AAC_INIT_FREQUENCY(
-		AAC_SAMPLING_FREQ_8000 |
-		AAC_SAMPLING_FREQ_11025 |
-		AAC_SAMPLING_FREQ_12000 |
-		AAC_SAMPLING_FREQ_16000 |
-		AAC_SAMPLING_FREQ_22050 |
-		AAC_SAMPLING_FREQ_24000 |
-		AAC_SAMPLING_FREQ_32000 |
-		AAC_SAMPLING_FREQ_44100 |
-		AAC_SAMPLING_FREQ_48000 |
-		AAC_SAMPLING_FREQ_64000 |
-		AAC_SAMPLING_FREQ_88200 |
-		AAC_SAMPLING_FREQ_96000)
-	.channels =
-		AAC_CHANNELS_1 |
-		AAC_CHANNELS_2,
-	.vbr = 1,
-	AAC_INIT_BITRATE(0xFFFF)
-};
+extern struct a2dp_codec a2dp_codec_aac;
+#endif
+#if ENABLE_MP3
+extern struct a2dp_codec a2dp_codec_mpeg;
+#endif
+#if ENABLE_APTX
+extern struct a2dp_codec a2dp_codec_aptx;
+extern struct a2dp_codec a2dp_codec_aptx_hd;
 #endif
 
-#if ENABLE_APTX
-const a2dp_aptx_t bluez_a2dp_aptx = {
-	.info.vendor_id = APTX_VENDOR_ID,
-	.info.codec_id = APTX_CODEC_ID,
-	.channel_mode =
-		/* NOTE: Used apt-X library does not support
-		 *       single channel (mono) mode. */
-		APTX_CHANNEL_MODE_DUAL_CHANNEL |
-		APTX_CHANNEL_MODE_STEREO |
-		APTX_CHANNEL_MODE_JOINT_STEREO,
-	.frequency =
-		APTX_SAMPLING_FREQ_16000 |
-		APTX_SAMPLING_FREQ_32000 |
-		APTX_SAMPLING_FREQ_44100 |
-		APTX_SAMPLING_FREQ_48000,
-};
+const struct a2dp_codec *a2dp_codec_list[] = {
+#if ENABLE_LDAC
+	&a2dp_codec_ldac,
 #endif
+#if ENABLE_APTX
+	&a2dp_codec_aptx_hd,
+	&a2dp_codec_aptx,
+#endif
+#if ENABLE_AAC
+	&a2dp_codec_aac,
+#endif
+#if ENABLE_MP3
+	&a2dp_codec_mpeg,
+#endif
+	&a2dp_codec_sbc,
+	NULL,
+};
+const struct a2dp_codec **a2dp_codecs = a2dp_codec_list;
