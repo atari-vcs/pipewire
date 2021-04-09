@@ -38,6 +38,7 @@ extern "C" {
 #include <spa/support/loop.h>
 #include <spa/support/log.h>
 #include <spa/utils/list.h>
+#include <spa/utils/json.h>
 
 #include <spa/node/node.h>
 #include <spa/node/utils.h>
@@ -111,10 +112,14 @@ struct state {
 	struct spa_audio_info current_format;
 
 	uint32_t default_period_size;
+	uint32_t default_headroom;
+	uint32_t default_start_delay;
 	uint32_t default_format;
 	unsigned int default_channels;
 	unsigned int default_rate;
 	struct channel_map default_pos;
+	unsigned int disable_mmap;
+	unsigned int disable_batch;
 
 	snd_pcm_uframes_t buffer_frames;
 	snd_pcm_uframes_t period_frames;
@@ -149,6 +154,7 @@ struct state {
 	uint32_t threshold;
 	uint32_t last_threshold;
 	uint32_t headroom;
+	uint32_t start_delay;
 
 	uint32_t duration;
 	uint32_t last_duration;
@@ -159,6 +165,8 @@ struct state {
 	unsigned int following:1;
 	unsigned int matching:1;
 	unsigned int resample:1;
+	unsigned int use_mmap:1;
+	unsigned int planar:1;
 
 	int64_t sample_count;
 
@@ -168,9 +176,9 @@ struct state {
 	uint64_t base_time;
 
 	uint64_t underrun;
-	double safety;
 
 	struct spa_dll dll;
+	double max_error;
 };
 
 int
@@ -186,7 +194,7 @@ int spa_alsa_reassign_follower(struct state *state);
 int spa_alsa_pause(struct state *state);
 int spa_alsa_close(struct state *state);
 
-int spa_alsa_write(struct state *state, snd_pcm_uframes_t silence);
+int spa_alsa_write(struct state *state);
 int spa_alsa_read(struct state *state, snd_pcm_uframes_t silence);
 
 void spa_alsa_recycle_buffer(struct state *state, uint32_t buffer_id);
@@ -201,14 +209,30 @@ static inline uint32_t spa_alsa_format_from_name(const char *name, size_t len)
 	return SPA_AUDIO_FORMAT_UNKNOWN;
 }
 
-static inline uint32_t spa_alsa_channel_from_name(const char *name, size_t len)
+static inline uint32_t spa_alsa_channel_from_name(const char *name)
 {
 	int i;
 	for (i = 0; spa_type_audio_channel[i].name; i++) {
-		if (strncmp(name, spa_debug_type_short_name(spa_type_audio_channel[i].name), len) == 0)
+		if (strcmp(name, spa_debug_type_short_name(spa_type_audio_channel[i].name)) == 0)
 			return spa_type_audio_channel[i].type;
 	}
 	return SPA_AUDIO_CHANNEL_UNKNOWN;
+}
+
+static inline void spa_alsa_parse_position(struct channel_map *map, const char *val, size_t len)
+{
+	struct spa_json it[2];
+	char v[256];
+
+	spa_json_init(&it[0], val, len);
+        if (spa_json_enter_array(&it[0], &it[1]) <= 0)
+                spa_json_init(&it[1], val, len);
+
+	map->channels = 0;
+	while (spa_json_get_string(&it[1], v, sizeof(v)) > 0 &&
+	    map->channels < SPA_AUDIO_MAX_CHANNELS) {
+		map->pos[map->channels++] = spa_alsa_channel_from_name(v);
+	}
 }
 
 #ifdef __cplusplus

@@ -71,7 +71,7 @@ static void expect_string(struct spa_json *it, const char *str)
 	char *s;
 	spa_assert((len = spa_json_next(it, &value)) > 0);
 	check_type(TYPE_STRING, value, len);
-	s = alloca(len);
+	s = alloca(len+1);
 	spa_json_parse_string(value, len, s);
 	spa_assert(strcmp(s, str) == 0);
 }
@@ -154,14 +154,60 @@ static void test_encode(void)
 	char dst[1024];
 	char dst4[4];
 	char dst6[6];
+	char result[1024];
 	spa_assert(spa_json_encode_string(dst, sizeof(dst), "test") == 6);
 	spa_assert(strcmp(dst, "\"test\"") == 0);
 	spa_assert(spa_json_encode_string(dst4, sizeof(dst4), "test") == 6);
 	spa_assert(strncmp(dst4, "\"tes", 4) == 0);
 	spa_assert(spa_json_encode_string(dst6, sizeof(dst6), "test") == 6);
 	spa_assert(strncmp(dst6, "\"test\"", 6) == 0);
-	spa_assert(spa_json_encode_string(dst, sizeof(dst), "test\"\n\r \t\b\f\'") == 19);
-	spa_assert(strcmp(dst, "\"test\"\\n\\r \\t\\b\\f'\"") == 0);
+	spa_assert(spa_json_encode_string(dst, sizeof(dst), "test\"\n\r \t\b\f\'") == 20);
+	spa_assert(strcmp(dst, "\"test\\\"\\n\\r \\t\\b\\f'\"") == 0);
+	spa_assert(spa_json_encode_string(dst, sizeof(dst), "\x04\x05\x1f\x20\x01\x7f\x90") == 29);
+	spa_assert(strcmp(dst, "\"\\u0004\\u0005\\u001f \\u0001\x7f\x90\"") == 0);
+	spa_assert(spa_json_parse_string(dst, sizeof(dst), result) == 1);
+	spa_assert(strcmp(result, "\x04\x05\x1f\x20\x01\x7f\x90") == 0);
+}
+
+static void test_array(char *str, char **vals)
+{
+	struct spa_json it[2];
+	char val[256];
+	int i;
+
+	spa_json_init(&it[0], str, strlen(str));
+	if (spa_json_enter_array(&it[0], &it[1]) <= 0)
+		spa_json_init(&it[1], str, strlen(str));
+	for (i = 0; vals[i]; i++) {
+		spa_assert(spa_json_get_string(&it[1], val, sizeof(val)) > 0);
+		spa_assert(strcmp(val, vals[i]) == 0);
+	}
+}
+
+static void test_arrays(void)
+{
+	test_array("FL,FR", (char *[]){ "FL", "FR", NULL });
+	test_array(" FL , FR ", (char *[]){ "FL", "FR", NULL });
+	test_array("[ FL , FR ]", (char *[]){ "FL", "FR", NULL });
+	test_array("[FL FR]", (char *[]){ "FL", "FR", NULL });
+	test_array("FL FR", (char *[]){ "FL", "FR", NULL });
+	test_array("[ FL FR ]", (char *[]){ "FL", "FR", NULL });
+}
+
+static void test_overflow(void)
+{
+	struct spa_json it[2];
+	char val[3];
+	const char *str = "[ F, FR, FRC ]";
+
+	spa_json_init(&it[0], str, strlen(str));
+	spa_assert(spa_json_enter_array(&it[0], &it[1]) > 0);
+
+	spa_assert(spa_json_get_string(&it[1], val, sizeof(val)) > 0);
+	spa_assert(strcmp(val, "F") == 0);
+	spa_assert(spa_json_get_string(&it[1], val, sizeof(val)) > 0);
+	spa_assert(strcmp(val, "FR") == 0);
+	spa_assert(spa_json_get_string(&it[1], val, sizeof(val)) < 0);
 }
 
 int main(int argc, char *argv[])
@@ -169,5 +215,7 @@ int main(int argc, char *argv[])
 	test_abi();
 	test_parse();
 	test_encode();
+	test_arrays();
+	test_overflow();
 	return 0;
 }

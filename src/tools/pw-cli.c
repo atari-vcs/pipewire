@@ -33,9 +33,10 @@
 #endif
 #include <getopt.h>
 
+#define spa_debug(...) fprintf(stdout,__VA_ARGS__);fputc('\n', stdout)
+
 #include <spa/utils/result.h>
 #include <spa/debug/pod.h>
-#include <spa/debug/format.h>
 #include <spa/utils/keys.h>
 #include <spa/utils/json.h>
 #include <spa/pod/builder.h>
@@ -436,7 +437,6 @@ static void on_core_destroy(void *_data)
 	spa_list_remove(&rd->link);
 
 	spa_hook_remove(&rd->core_listener);
-	spa_hook_remove(&rd->registry_listener);
 	spa_hook_remove(&rd->proxy_core_listener);
 
 	pw_map_remove(&data->vars, rd->id);
@@ -455,6 +455,7 @@ static const struct pw_proxy_events proxy_core_events = {
 
 static void remote_data_free(struct remote_data *rd)
 {
+	spa_hook_remove(&rd->registry_listener);
 	pw_proxy_destroy((struct pw_proxy*)rd->registry);
 	pw_core_disconnect(rd->core);
 }
@@ -681,7 +682,7 @@ static void info_link(struct proxy_data *pd)
 		printf("\n");
 	fprintf(stdout, "%c\tformat:\n", MARK_CHANGE(PW_LINK_CHANGE_MASK_FORMAT));
 	if (info->format)
-		spa_debug_format(2, NULL, info->format);
+		spa_debug_pod(2, NULL, info->format);
 	else
 		fprintf(stdout, "\t\tnone\n");
 	print_properties(info->props, MARK_CHANGE(PW_LINK_CHANGE_MASK_PROPS), true);
@@ -815,10 +816,7 @@ static void event_param(void *object, int seq, uint32_t id,
 		fprintf(stdout, "remote %d object %d param %d index %d\n",
 				rd->id, data->global->id, id, index);
 
-	if (spa_pod_is_object_type(param, SPA_TYPE_OBJECT_Format))
-		spa_debug_format(2, NULL, param);
-	else
-		spa_debug_pod(2, NULL, param);
+	spa_debug_pod(2, NULL, param);
 }
 
 static const struct pw_node_events node_events = {
@@ -1550,7 +1548,7 @@ static int json_to_pod(struct spa_pod_builder *b, uint32_t id,
 	char key[256];
 	struct spa_pod_frame f[1];
 	struct spa_json it[1];
-	int l;
+	int l, res;
 	const char *v;
 
 	if (spa_json_is_object(value, len)) {
@@ -1567,7 +1565,8 @@ static int json_to_pod(struct spa_pod_builder *b, uint32_t id,
 			if ((pi = find_type_info(ti->values, key)) == NULL)
 				continue;
 			spa_pod_builder_prop(b, pi->type, 0);
-			json_to_pod(b, id, pi, &it[0], v, l);
+			if ((res = json_to_pod(b, id, pi, &it[0], v, l)) < 0)
+				return res;
 		}
 		spa_pod_builder_pop(b, &f[0]);
 	}
@@ -1575,7 +1574,8 @@ static int json_to_pod(struct spa_pod_builder *b, uint32_t id,
 		spa_pod_builder_push_array(b, &f[0]);
 		spa_json_enter(iter, &it[0]);
 		while ((l = spa_json_next(&it[0], &v)) > 0)
-			json_to_pod(b, id, info->values, &it[0], v, l);
+			if ((res = json_to_pod(b, id, info->values, &it[0], v, l)) < 0)
+				return res;
 		spa_pod_builder_pop(b, &f[0]);
 	}
 	else if (spa_json_is_float(value, len)) {
@@ -1605,13 +1605,22 @@ static int json_to_pod(struct spa_pod_builder *b, uint32_t id,
 			break;
 		}
 	}
-	else if (spa_json_is_string(value, len)) {
-		char *val = alloca(len);
+	else if (spa_json_is_bool(value, len)) {
+		bool val = false;
+		spa_json_parse_bool(value, len, &val);
+		spa_pod_builder_bool(b, val);
+	}
+	else if (spa_json_is_null(value, len)) {
+		spa_pod_builder_none(b);
+	}
+	else {
+		char *val = alloca(len+1);
 		spa_json_parse_string(value, len, val);
 		switch (info->parent) {
 		case SPA_TYPE_Id:
-			if ((ti = find_type_info(info ? info->values : info, val)) != NULL)
-				spa_pod_builder_id(b, ti->type);
+			if ((ti = find_type_info(info->values, val)) == NULL)
+				return -EINVAL;
+			spa_pod_builder_id(b, ti->type);
 			break;
 		case SPA_TYPE_String:
 			spa_pod_builder_string(b, val);
@@ -1621,17 +1630,6 @@ static int json_to_pod(struct spa_pod_builder *b, uint32_t id,
 			break;
 		}
 	}
-	else if (spa_json_is_bool(value, len)) {
-		bool val = false;
-		spa_json_parse_bool(value, len, &val);
-		spa_pod_builder_bool(b, val);
-	}
-	else if (spa_json_is_null(value, len)) {
-		spa_pod_builder_none(b);
-	}
-	else
-		return -EINVAL;
-
 	return 0;
 }
 
@@ -1656,7 +1654,6 @@ static bool do_set_param(struct data *data, const char *cmd, char *args, char **
 	}
 
 	id = atoi(a[0]);
-	param_id = atoi(a[1]);
 
 	global = pw_map_lookup(&rd->globals, id);
 	if (global == NULL) {
@@ -1668,11 +1665,12 @@ static bool do_set_param(struct data *data, const char *cmd, char *args, char **
 			return false;
 	}
 
-	ti = spa_debug_type_find(spa_type_param, param_id);
+	ti = find_type_info(spa_type_param, a[1]);
 	if (ti == NULL) {
-		*error = spa_aprintf("%s: unknown param type: %d", cmd, param_id);
+		*error = spa_aprintf("%s: unknown param type: %s", cmd, a[1]);
 		return false;
 	}
+	param_id = ti->type;
 
 	spa_json_init(&it[0], a[2], strlen(a[2]));
 	if ((len = spa_json_next(&it[0], &val)) <= 0) {
@@ -2041,7 +2039,7 @@ static const char *name_to_dump_type(const char *name)
 		return NULL;
 
 	for (i = 0; i < SPA_N_ELEMENTS(dump_types); i++) {
-		if (!strcmp(name, pw_interface_short(dump_types[i])))
+		if (!strcasecmp(name, pw_interface_short(dump_types[i])))
 			return dump_types[i];
 	}
 
@@ -2567,7 +2565,7 @@ dump_link(struct data *data, struct global *global,
 			printf("\n");
 		fprintf(stdout, "%sformat:\n", ind);
 		if (info->format)
-			spa_debug_format(8 * (level + 1) + 2, NULL, info->format);
+			spa_debug_pod(8 * (level + 1) + 2, NULL, info->format);
 		else
 			fprintf(stdout, "%s\tnone\n", ind);
 
@@ -3004,6 +3002,10 @@ int main(int argc, char *argv[])
 	}
 
 	data.loop = pw_main_loop_new(NULL);
+	if (data.loop == NULL) {
+		fprintf(stderr, "Broken installation: %m\n");
+		return -1;
+	}
 	l = pw_main_loop_get_loop(data.loop);
 	pw_loop_add_signal(l, SIGINT, do_quit, &data);
 	pw_loop_add_signal(l, SIGTERM, do_quit, &data);

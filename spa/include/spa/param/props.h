@@ -66,6 +66,7 @@ enum spa_prop {
 	SPA_PROP_live,
 	SPA_PROP_rate,
 	SPA_PROP_quality,
+	SPA_PROP_bluetoothAudioCodec,
 
 	SPA_PROP_START_Audio	= 0x10000,	/**< audio related properties */
 	SPA_PROP_waveType,
@@ -81,6 +82,10 @@ enum spa_prop {
 	SPA_PROP_volumeStep,			/**< a volume step (Float) */
 	SPA_PROP_channelMap,			/**< a channelmap array
 						  * (Array (Id enum spa_audio_channel)) */
+	SPA_PROP_monitorMute,			/**< mute (Bool) */
+	SPA_PROP_monitorVolumes,		/**< a volume array, one volume per
+						  *  channel (Array of Float) */
+	SPA_PROP_latencyOffsetNsec,		/**< delay adjustment */
 
 	SPA_PROP_START_Video	= 0x20000,	/**< video related properties */
 	SPA_PROP_brightness,

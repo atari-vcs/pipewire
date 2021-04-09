@@ -172,10 +172,7 @@ int pw_properties_update_string(struct pw_properties *props, const char *str, si
 			if (spa_json_is_container(value, len))
 				len = spa_json_container_len(&it[1], value, len);
 
-			if ((val = strndup(value, len)) == NULL)
-				return -errno;
-
-			if (spa_json_is_string(value, len))
+			if ((val = malloc(len+1)) != NULL)
 				spa_json_parse_string(value, len, val);
 		}
 		count += pw_properties_set(&impl->this, key, val);
@@ -247,6 +244,30 @@ int pw_properties_update_keys(struct pw_properties *props,
 	for (i = 0; keys[i]; i++) {
 		if ((str = spa_dict_lookup(dict, keys[i])) != NULL)
 			changed += pw_properties_set(props, keys[i], str);
+	}
+	return changed;
+}
+
+static bool has_key(const char *keys[], const char *key)
+{
+	int i;
+	for (i = 0; keys[i]; i++) {
+		if (strcmp(keys[i], key) == 0)
+			return true;
+	}
+	return false;
+}
+
+SPA_EXPORT
+int pw_properties_update_ignore(struct pw_properties *props,
+		const struct spa_dict *dict, const char *ignore[])
+{
+	const struct spa_dict_item *it;
+	int changed = 0;
+
+	spa_dict_for_each(it, dict) {
+		if (ignore == NULL || !has_key(ignore, it->key))
+			changed += pw_properties_set(props, it->key, it->value);
 	}
 	return changed;
 }
@@ -375,6 +396,7 @@ static int do_replace(struct pw_properties *properties, const char *key, char *v
 		if (value == NULL)
 			return 0;
 		add_func(properties, strdup(key), copy ? strdup(value) : value);
+		SPA_FLAG_CLEAR(properties->dict.flags, SPA_DICT_FLAG_SORTED);
 	} else {
 		struct spa_dict_item *item =
 		    pw_array_get_unchecked(&impl->items, index, struct spa_dict_item);
@@ -391,6 +413,7 @@ static int do_replace(struct pw_properties *properties, const char *key, char *v
 			item->value = last->value;
 			impl->items.size -= sizeof(struct spa_dict_item);
 			properties->dict.n_items--;
+			SPA_FLAG_CLEAR(properties->dict.flags, SPA_DICT_FLAG_SORTED);
 		} else {
 			free((char *) item->value);
 			item->value = copy ? strdup(value) : value;

@@ -45,6 +45,13 @@ executable('pw-metadata',
 	dependencies : [pipewire_dep],
 )
 
+executable('pw-loopback',
+	[ 'pw-loopback.c'],
+	c_args : [ '-D_GNU_SOURCE' ],
+	install: true,
+	dependencies : [pipewire_dep],
+)
+
 if ncurses_dep.found()
   executable('pw-top',
 	'pw-top.c',
@@ -54,7 +61,7 @@ if ncurses_dep.found()
   )
 endif
 
-if get_option('pw-cat') and sndfile_dep.found()
+if not get_option('pw-cat').disabled() and sndfile_dep.found()
 
   pwcat_sources = [
     'pw-cat.c',
@@ -80,5 +87,6 @@ if get_option('pw-cat') and sndfile_dep.found()
     cmd = 'ln -fs @0@ $DESTDIR@1@'.format('pw-cat', dst)
     meson.add_install_script('sh', '-c', cmd)
   endforeach
-
+elif not sndfile_dep.found() and get_option('pw-cat').enabled()
+	error('pw-cat is enabled but required dependency `sndfile` was not found.')
 endif

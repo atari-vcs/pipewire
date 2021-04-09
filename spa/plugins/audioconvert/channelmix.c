@@ -31,6 +31,7 @@
 #include <spa/support/cpu.h>
 #include <spa/utils/list.h>
 #include <spa/utils/names.h>
+#include <spa/utils/json.h>
 #include <spa/node/keys.h>
 #include <spa/node/node.h>
 #include <spa/node/io.h>
@@ -74,7 +75,7 @@ static void props_reset(struct props *props)
 	props->volume = DEFAULT_VOLUME;
 	props->n_channel_volumes = 0;
 	for (i = 0; i < SPA_AUDIO_MAX_CHANNELS; i++)
-		props->channel_volumes[i] = 1.0;
+		props->channel_volumes[i] = 1.0f;
 	props->n_channels = 0;
 	for (i = 0; i < SPA_AUDIO_MAX_CHANNELS; i++)
 		props->channel_map[i] = SPA_AUDIO_CHANNEL_UNKNOWN;
@@ -96,7 +97,12 @@ struct port {
 
 	uint64_t info_all;
 	struct spa_port_info info;
-	struct spa_param_info params[8];
+#define IDX_EnumFormat	0
+#define IDX_Meta	1
+#define IDX_IO		2
+#define IDX_Format	3
+#define IDX_Buffers	4
+	struct spa_param_info params[5];
 
 	struct spa_io_buffers *io;
 
@@ -127,7 +133,9 @@ struct impl {
 	uint64_t info_all;
 	struct spa_node_info info;
 	struct props props;
-	struct spa_param_info params[8];
+#define IDX_PropInfo	0
+#define IDX_Props	1
+	struct spa_param_info params[2];
 
 
 	struct port control_port;
@@ -162,10 +170,10 @@ static void emit_info(struct impl *this, bool full)
 	}
 }
 
-static void emit_params_changed(struct impl *this)
+static void emit_props_changed(struct impl *this)
 {
 	this->info.change_mask |= SPA_NODE_CHANGE_MASK_PARAMS;
-	this->params[1].flags ^= SPA_PARAM_INFO_SERIAL;
+	this->params[IDX_Props].flags ^= SPA_PARAM_INFO_SERIAL;
 	emit_info(this, false);
 }
 
@@ -204,12 +212,25 @@ static uint64_t default_mask(uint32_t channels)
 	}
 	return mask;
 }
-
-static int remap_volumes(struct props *p, const struct spa_audio_info *info)
+static int remap_volumes(struct impl *this, const struct spa_audio_info *info)
 {
 	float s;
-	uint32_t i, target = info->info.raw.channels;
+	struct props *p = &this->props;
+	uint32_t i, j, target = info->info.raw.channels;
 
+	for (i = 0; i < p->n_channels; i++) {
+		for (j = i; j < target; j++) {
+			spa_log_debug(this->log, "%d %d: %d <-> %d", i, j,
+					p->channel_map[i], info->info.raw.position[j]);
+			if (p->channel_map[i] != info->info.raw.position[j])
+				continue;
+			if (i != j) {
+				SPA_SWAP(p->channel_map[i], p->channel_map[j]);
+				SPA_SWAP(p->channel_volumes[i], p->channel_volumes[j]);
+			}
+			break;
+		}
+	}
 	p->n_channels = target;
 	for (i = 0; i < p->n_channels; i++)
 		p->channel_map[i] = info->info.raw.position[i];
@@ -236,7 +257,7 @@ static int setup_convert(struct impl *this,
 		const struct spa_audio_info *info)
 {
 	const struct spa_audio_info *src_info, *dst_info;
-	uint32_t i, src_chan, dst_chan;
+	uint32_t i, src_chan, dst_chan, p;
 	uint64_t src_mask, dst_mask;
 	int res;
 
@@ -251,10 +272,14 @@ static int setup_convert(struct impl *this,
 	src_chan = src_info->info.raw.channels;
 	dst_chan = dst_info->info.raw.channels;
 
-	for (i = 0, src_mask = 0; i < src_chan; i++)
-		src_mask |= 1UL << src_info->info.raw.position[i];
-	for (i = 0, dst_mask = 0; i < dst_chan; i++)
-		dst_mask |= 1UL << dst_info->info.raw.position[i];
+	for (i = 0, src_mask = 0; i < src_chan; i++) {
+		p = src_info->info.raw.position[i];
+		src_mask |= 1ULL << (p < 64 ? p : 0);
+	}
+	for (i = 0, dst_mask = 0; i < dst_chan; i++) {
+		p = dst_info->info.raw.position[i];
+		dst_mask |= 1ULL << (p < 64 ? p : 0);
+	}
 
 	if (src_mask & 1 || src_chan == 1)
 		src_mask = default_mask(src_chan);
@@ -279,22 +304,24 @@ static int setup_convert(struct impl *this,
 	this->mix.dst_mask = dst_mask;
 	this->mix.cpu_flags = this->cpu_flags;
 	this->mix.log = this->log;
+	this->mix.freq = src_info->info.raw.rate;
 
 	if ((res = channelmix_init(&this->mix)) < 0)
 		return res;
 
-	remap_volumes(&this->props, src_info);
+	remap_volumes(this, src_info);
 
 	channelmix_set_volume(&this->mix, this->props.volume, this->props.mute,
 			this->props.n_channel_volumes, this->props.channel_volumes);
 
-	emit_params_changed(this);
-
-	spa_log_debug(this->log, NAME " %p: got channelmix features %08x:%08x flags:%08x",
-			this, this->cpu_flags, this->mix.cpu_flags,
-			this->mix.flags);
+	emit_props_changed(this);
 
 	this->is_passthrough = SPA_FLAG_IS_SET(this->mix.flags, CHANNELMIX_FLAG_IDENTITY);
+
+	spa_log_debug(this->log, NAME " %p: got channelmix features %08x:%08x flags:%08x passthrough:%d",
+			this, this->cpu_flags, this->mix.cpu_flags,
+			this->mix.flags, this->is_passthrough);
+
 
 	return 0;
 }
@@ -432,7 +459,7 @@ static int apply_props(struct impl *this, const struct spa_pod *param)
 		}
 	}
 	if (changed && this->mix.set_volume) {
-		remap_volumes(&this->props, &GET_IN_PORT(this, 0)->format);
+		remap_volumes(this, &GET_IN_PORT(this, 0)->format);
 		channelmix_set_volume(&this->mix, p->volume, p->mute,
 				p->n_channel_volumes, p->channel_volumes);
 	}
@@ -473,7 +500,7 @@ static int impl_node_set_param(void *object, uint32_t id, uint32_t flags,
 	switch (id) {
 	case SPA_PARAM_Props:
 		if (apply_props(this, param) > 0)
-			emit_params_changed(this);
+			emit_props_changed(this);
 		break;
 	default:
 		return -ENOENT;
@@ -820,11 +847,11 @@ static int port_set_format(void *object,
 
 	port->info.change_mask |= SPA_PORT_CHANGE_MASK_PARAMS;
 	if (port->have_format) {
-		port->params[3] = SPA_PARAM_INFO(SPA_PARAM_Format, SPA_PARAM_INFO_READWRITE);
-		port->params[4] = SPA_PARAM_INFO(SPA_PARAM_Buffers, SPA_PARAM_INFO_READ);
+		port->params[IDX_Format] = SPA_PARAM_INFO(SPA_PARAM_Format, SPA_PARAM_INFO_READWRITE);
+		port->params[IDX_Buffers] = SPA_PARAM_INFO(SPA_PARAM_Buffers, SPA_PARAM_INFO_READ);
 	} else {
-		port->params[3] = SPA_PARAM_INFO(SPA_PARAM_Format, SPA_PARAM_INFO_WRITE);
-		port->params[4] = SPA_PARAM_INFO(SPA_PARAM_Buffers, 0);
+		port->params[IDX_Format] = SPA_PARAM_INFO(SPA_PARAM_Format, SPA_PARAM_INFO_WRITE);
+		port->params[IDX_Buffers] = SPA_PARAM_INFO(SPA_PARAM_Buffers, 0);
 	}
 	emit_port_info(this, port, false);
 
@@ -1199,14 +1226,31 @@ impl_get_size(const struct spa_handle_factory *factory,
 	return sizeof(struct impl);
 }
 
-static uint32_t channel_from_name(const char *name, size_t len)
+static uint32_t channel_from_name(const char *name)
 {
 	int i;
 	for (i = 0; spa_type_audio_channel[i].name; i++) {
-		if (strncmp(name, spa_debug_type_short_name(spa_type_audio_channel[i].name), len) == 0)
+		if (strcmp(name, spa_debug_type_short_name(spa_type_audio_channel[i].name)) == 0)
 			return spa_type_audio_channel[i].type;
 	}
 	return SPA_AUDIO_CHANNEL_UNKNOWN;
+}
+
+static inline uint32_t parse_position(uint32_t *pos, const char *val, size_t len)
+{
+	struct spa_json it[2];
+	char v[256];
+	uint32_t i = 0;
+
+	spa_json_init(&it[0], val, len);
+        if (spa_json_enter_array(&it[0], &it[1]) <= 0)
+                spa_json_init(&it[1], val, len);
+
+	while (spa_json_get_string(&it[1], v, sizeof(v)) > 0 &&
+	    i < SPA_AUDIO_MAX_CHANNELS) {
+		pos[i++] = channel_from_name(v);
+	}
+	return i;
 }
 
 static int
@@ -1218,7 +1262,7 @@ impl_init(const struct spa_handle_factory *factory,
 {
 	struct impl *this;
 	struct port *port;
-	const char *str;
+	uint32_t i;
 
 	spa_return_val_if_fail(factory != NULL, -EINVAL);
 	spa_return_val_if_fail(handle != NULL, -EINVAL);
@@ -1238,24 +1282,22 @@ impl_init(const struct spa_handle_factory *factory,
 
 	props_reset(&this->props);
 
-	if (info != NULL) {
-		if ((str = spa_dict_lookup(info, "channelmix.normalize")) != NULL &&
-		    (strcmp(str, "true") == 0 || atoi(str) != 0))
+	for (i = 0; info && i < info->n_items; i++) {
+		const char *k = info->items[i].key;
+		const char *s = info->items[i].value;
+		if (strcmp(k, "channelmix.normalize") == 0 &&
+		    (strcmp(s, "true") == 0 || atoi(s) != 0))
 			this->mix.options |= CHANNELMIX_OPTION_NORMALIZE;
-		if ((str = spa_dict_lookup(info, "channelmix.mix-lfe")) != NULL &&
-		    (strcmp(str, "true") == 0 || atoi(str) != 0))
+		if (strcmp(k, "channelmix.mix-lfe") == 0 &&
+		    (strcmp(s, "true") == 0 || atoi(s) != 0))
 			this->mix.options |= CHANNELMIX_OPTION_MIX_LFE;
-		if ((str = spa_dict_lookup(info, SPA_KEY_AUDIO_POSITION)) != NULL) {
-			size_t len;
-			const char *p = str;
-			while (*p && this->props.n_channels < SPA_AUDIO_MAX_CHANNELS) {
-				if ((len = strcspn(p, ",")) == 0)
-					break;
-				this->props.channel_map[this->props.n_channels++] =
-					channel_from_name(p, len);
-				p += len + strspn(p+len, ",");
-			}
-		}
+		if (strcmp(k, "channelmix.upmix") == 0 &&
+		    (strcmp(s, "true") == 0 || atoi(s) != 0))
+			this->mix.options |= CHANNELMIX_OPTION_UPMIX;
+		if (strcmp(k, "channelmix.lfe-cutoff") == 0)
+			this->mix.lfe_cutoff = atoi(s);
+		if (strcmp(k, SPA_KEY_AUDIO_POSITION) == 0)
+			this->props.n_channels = parse_position(this->props.channel_map, s, strlen(s));
 	}
 	this->props.n_channel_volumes = this->props.n_channels;
 
@@ -1269,8 +1311,8 @@ impl_init(const struct spa_handle_factory *factory,
 	this->info.flags = SPA_NODE_FLAG_RT;
 	this->info.max_input_ports = 2;
 	this->info.max_output_ports = 1;
-	this->params[0] = SPA_PARAM_INFO(SPA_PARAM_PropInfo, SPA_PARAM_INFO_READ);
-	this->params[1] = SPA_PARAM_INFO(SPA_PARAM_Props, SPA_PARAM_INFO_READWRITE);
+	this->params[IDX_PropInfo] = SPA_PARAM_INFO(SPA_PARAM_PropInfo, SPA_PARAM_INFO_READ);
+	this->params[IDX_Props] = SPA_PARAM_INFO(SPA_PARAM_Props, SPA_PARAM_INFO_READWRITE);
 	this->info.params = this->params;
 	this->info.n_params = 2;
 
@@ -1281,11 +1323,11 @@ impl_init(const struct spa_handle_factory *factory,
 			SPA_PORT_CHANGE_MASK_PARAMS;
 	port->info = SPA_PORT_INFO_INIT();
 	port->info.flags = SPA_PORT_FLAG_DYNAMIC_DATA;
-	port->params[0] = SPA_PARAM_INFO(SPA_PARAM_EnumFormat, SPA_PARAM_INFO_READ);
-	port->params[1] = SPA_PARAM_INFO(SPA_PARAM_Meta, SPA_PARAM_INFO_READ);
-	port->params[2] = SPA_PARAM_INFO(SPA_PARAM_IO, SPA_PARAM_INFO_READ);
-	port->params[3] = SPA_PARAM_INFO(SPA_PARAM_Format, SPA_PARAM_INFO_WRITE);
-	port->params[4] = SPA_PARAM_INFO(SPA_PARAM_Buffers, 0);
+	port->params[IDX_EnumFormat] = SPA_PARAM_INFO(SPA_PARAM_EnumFormat, SPA_PARAM_INFO_READ);
+	port->params[IDX_Meta] = SPA_PARAM_INFO(SPA_PARAM_Meta, SPA_PARAM_INFO_READ);
+	port->params[IDX_IO] = SPA_PARAM_INFO(SPA_PARAM_IO, SPA_PARAM_INFO_READ);
+	port->params[IDX_Format] = SPA_PARAM_INFO(SPA_PARAM_Format, SPA_PARAM_INFO_WRITE);
+	port->params[IDX_Buffers] = SPA_PARAM_INFO(SPA_PARAM_Buffers, 0);
 	port->info.params = port->params;
 	port->info.n_params = 5;
 	spa_list_init(&port->queue);
@@ -1298,11 +1340,11 @@ impl_init(const struct spa_handle_factory *factory,
 	port->info = SPA_PORT_INFO_INIT();
 	port->info.flags = SPA_PORT_FLAG_NO_REF |
 		SPA_PORT_FLAG_DYNAMIC_DATA;
-	port->params[0] = SPA_PARAM_INFO(SPA_PARAM_EnumFormat, SPA_PARAM_INFO_READ);
-	port->params[1] = SPA_PARAM_INFO(SPA_PARAM_Meta, SPA_PARAM_INFO_READ);
-	port->params[2] = SPA_PARAM_INFO(SPA_PARAM_IO, SPA_PARAM_INFO_READ);
-	port->params[3] = SPA_PARAM_INFO(SPA_PARAM_Format, SPA_PARAM_INFO_WRITE);
-	port->params[4] = SPA_PARAM_INFO(SPA_PARAM_Buffers, 0);
+	port->params[IDX_EnumFormat] = SPA_PARAM_INFO(SPA_PARAM_EnumFormat, SPA_PARAM_INFO_READ);
+	port->params[IDX_Meta] = SPA_PARAM_INFO(SPA_PARAM_Meta, SPA_PARAM_INFO_READ);
+	port->params[IDX_IO] = SPA_PARAM_INFO(SPA_PARAM_IO, SPA_PARAM_INFO_READ);
+	port->params[IDX_Format] = SPA_PARAM_INFO(SPA_PARAM_Format, SPA_PARAM_INFO_WRITE);
+	port->params[IDX_Buffers] = SPA_PARAM_INFO(SPA_PARAM_Buffers, 0);
 	port->info.params = port->params;
 	port->info.n_params = 0;
 	spa_list_init(&port->queue);
@@ -1316,10 +1358,11 @@ impl_init(const struct spa_handle_factory *factory,
 	port->info = SPA_PORT_INFO_INIT();
 	port->info.flags = SPA_PORT_FLAG_NO_REF |
 		SPA_PORT_FLAG_DYNAMIC_DATA;
-	port->params[0] = SPA_PARAM_INFO(SPA_PARAM_EnumFormat, SPA_PARAM_INFO_READ);
-	port->params[1] = SPA_PARAM_INFO(SPA_PARAM_IO, SPA_PARAM_INFO_READ);
-	port->params[2] = SPA_PARAM_INFO(SPA_PARAM_Format, SPA_PARAM_INFO_WRITE);
-	port->params[3] = SPA_PARAM_INFO(SPA_PARAM_Buffers, 0);
+	port->params[IDX_EnumFormat] = SPA_PARAM_INFO(SPA_PARAM_EnumFormat, SPA_PARAM_INFO_READ);
+	port->params[IDX_Meta] = SPA_PARAM_INFO(SPA_PARAM_Meta, 0);
+	port->params[IDX_IO] = SPA_PARAM_INFO(SPA_PARAM_IO, SPA_PARAM_INFO_READ);
+	port->params[IDX_Format] = SPA_PARAM_INFO(SPA_PARAM_Format, SPA_PARAM_INFO_WRITE);
+	port->params[IDX_Buffers] = SPA_PARAM_INFO(SPA_PARAM_Buffers, 0);
 	port->info.params = port->params;
 	port->info.n_params = 4;
 	spa_list_init(&port->queue);

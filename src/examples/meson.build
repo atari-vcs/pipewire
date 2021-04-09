@@ -65,7 +65,7 @@ executable('export-spa-device',
   dependencies : [pipewire_dep, mathlib],
 )
 
-if alsa_dep.found()
+if not get_option('media-session').disabled() and alsa_dep.found()
   executable('pipewire-media-session',
     'media-session/access-flatpak.c',
     'media-session/access-portal.c',
@@ -79,11 +79,13 @@ if alsa_dep.found()
     'media-session/default-routes.c',
     'media-session/media-session.c',
     'media-session/session-manager.c',
+    'media-session/match-rules.c',
     'media-session/metadata.c',
     'media-session/stream-endpoint.c',
     'media-session/restore-stream.c',
     'media-session/policy-ep.c',
     'media-session/policy-node.c',
+    'media-session/streams-follow-default.c',
     'media-session/v4l2-monitor.c',
     'media-session/v4l2-endpoint.c',
     'media-session/libcamera-monitor.c',

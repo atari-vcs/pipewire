@@ -269,18 +269,25 @@ static int impl_node_send_command(void *object, const struct spa_command *comman
 	return 0;
 }
 
-static const struct spa_dict_item node_info_items[] = {
-	{ SPA_KEY_DEVICE_API, "alsa" },
-	{ SPA_KEY_MEDIA_CLASS, "Audio/Sink" },
-	{ SPA_KEY_NODE_DRIVER, "true" },
-};
 
 static void emit_node_info(struct state *this, bool full)
 {
 	if (full)
 		this->info.change_mask = this->info_all;
 	if (this->info.change_mask) {
-		this->info.props = &SPA_DICT_INIT_ARRAY(node_info_items);
+		struct spa_dict_item items[4];
+		uint32_t n_items = 0;
+		char latency[64];
+
+		items[n_items++] = SPA_DICT_ITEM_INIT(SPA_KEY_DEVICE_API, "alsa");
+		items[n_items++] = SPA_DICT_ITEM_INIT(SPA_KEY_MEDIA_CLASS, "Audio/Sink");
+		items[n_items++] = SPA_DICT_ITEM_INIT(SPA_KEY_NODE_DRIVER, "true");
+		if (this->have_format) {
+			snprintf(latency, sizeof(latency), "%lu/%d", this->buffer_frames / 4, this->rate);
+			items[n_items++] = SPA_DICT_ITEM_INIT(SPA_KEY_NODE_MAX_LATENCY, latency);
+		}
+		this->info.props = &SPA_DICT_INIT(items, n_items);
+
 		spa_node_emit_info(&this->hooks, &this->info);
 		this->info.change_mask = 0;
 	}
@@ -505,6 +512,9 @@ static int port_set_format(void *object,
 		this->have_format = true;
 	}
 
+	this->info.change_mask |= SPA_NODE_CHANGE_MASK_PROPS;
+	emit_node_info(this, false);
+
 	this->port_info.change_mask |= SPA_PORT_CHANGE_MASK_RATE;
 	this->port_info.rate = SPA_FRACTION(1, this->rate);
 	this->port_info.change_mask |= SPA_PORT_CHANGE_MASK_PARAMS;
@@ -646,7 +656,7 @@ static int impl_node_process(void *object)
 		SPA_FLAG_CLEAR(b->flags, BUFFER_FLAG_OUT);
 		input->buffer_id = SPA_ID_INVALID;
 
-		spa_alsa_write(this, 0);
+		spa_alsa_write(this);
 
 		input->status = SPA_STATUS_OK;
 	}
@@ -775,26 +785,30 @@ impl_init(const struct spa_handle_factory *factory,
 	snd_config_update_free_global();
 
 	for (i = 0; info && i < info->n_items; i++) {
-		if (!strcmp(info->items[i].key, SPA_KEY_API_ALSA_PATH)) {
-			snprintf(this->props.device, 63, "%s", info->items[i].value);
-		} else if (!strcmp(info->items[i].key, SPA_KEY_AUDIO_CHANNELS)) {
-			this->default_channels = atoi(info->items[i].value);
-		} else if (!strcmp(info->items[i].key, SPA_KEY_AUDIO_RATE)) {
-			this->default_rate = atoi(info->items[i].value);
-		} else if (!strcmp(info->items[i].key, SPA_KEY_AUDIO_FORMAT)) {
-			this->default_format = spa_alsa_format_from_name(info->items[i].value, 128);
-		} else if (!strcmp(info->items[i].key, SPA_KEY_AUDIO_POSITION)) {
-			size_t len;
-			const char *p = info->items[i].value;
-			while (*p && this->default_pos.channels < SPA_AUDIO_MAX_CHANNELS) {
-				if ((len = strcspn(p, ",")) == 0)
-					break;
-				this->default_pos.pos[this->default_pos.channels++] =
-					spa_alsa_channel_from_name(p, len);
-				p += len + strspn(p+len, ",");
-			}
-		} else if (!strcmp(info->items[i].key, "api.alsa.period-size")) {
-			this->default_period_size = atoi(info->items[i].value);
+		const char *k = info->items[i].key;
+		const char *s = info->items[i].value;
+		if (!strcmp(k, SPA_KEY_API_ALSA_PATH)) {
+			snprintf(this->props.device, 63, "%s", s);
+		} else if (!strcmp(k, SPA_KEY_AUDIO_CHANNELS)) {
+			this->default_channels = atoi(s);
+		} else if (!strcmp(k, SPA_KEY_AUDIO_RATE)) {
+			this->default_rate = atoi(s);
+		} else if (!strcmp(k, SPA_KEY_AUDIO_FORMAT)) {
+			this->default_format = spa_alsa_format_from_name(s, strlen(s));
+		} else if (!strcmp(k, SPA_KEY_AUDIO_POSITION)) {
+			spa_alsa_parse_position(&this->default_pos, s, strlen(s));
+		} else if (!strcmp(k, "api.alsa.period-size")) {
+			this->default_period_size = atoi(s);
+		} else if (!strcmp(k, "api.alsa.headroom")) {
+			this->default_headroom = atoi(s);
+		} else if (!strcmp(k, "api.alsa.start-delay")) {
+			this->default_start_delay = atoi(s);
+		} else if (!strcmp(k, "api.alsa.disable-mmap")) {
+			this->disable_mmap = (strcmp(s, "true") == 0 || atoi(s) == 1);
+		} else if (!strcmp(k, "api.alsa.disable-batch")) {
+			this->disable_batch = (strcmp(s, "true") == 0 || atoi(s) == 1);
+		} else if (!strcmp(k, "api.alsa.use-chmap")) {
+			this->props.use_chmap = (strcmp(s, "true") == 0 || atoi(s) == 1);
 		}
 	}
 	return 0;
