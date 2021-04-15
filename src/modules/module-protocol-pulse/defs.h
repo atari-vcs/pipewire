@@ -39,7 +39,7 @@
 
 #define PROTOCOL_FLAG_MASK	0xffff0000u
 #define PROTOCOL_VERSION_MASK	0x0000ffffu
-#define PROTOCOL_VERSION	34
+#define PROTOCOL_VERSION	35
 
 #define NATIVE_COOKIE_LENGTH 256
 #define MAX_TAG_SIZE (64*1024)
@@ -47,20 +47,14 @@
 #define MIN_BUFFERS     8u
 #define MAX_BUFFERS     64u
 
-#define MIN_BLOCK	64u
-#define MIN_SAMPLES	16u
-#define MIN_USEC	(MIN_SAMPLES * SPA_USEC_PER_SEC / 48000u)
-
 #define MAXLENGTH		(4*1024*1024) /* 4MB */
-#define DEFAULT_TLENGTH_MSEC	2000 /* 2s */
-#define DEFAULT_PROCESS_MSEC	20   /* 20ms */
-#define DEFAULT_FRAGSIZE_MSEC	DEFAULT_TLENGTH_MSEC
 
 #define SCACHE_ENTRY_SIZE_MAX	(1024*1024*16)
 
 #define INDEX_MASK		0xffffu
 #define MONITOR_FLAG		(1u << 16)
 #define EXTENSION_FLAG		(1u << 17)
+#define MODULE_FLAG		(1u << 18)
 
 #define DEFAULT_SINK		"@DEFAULT_SINK@"
 #define DEFAULT_SOURCE		"@DEFAULT_SOURCE@"
@@ -106,9 +100,17 @@ static inline int res_to_err(int res)
 	case -EINVAL: return ERR_INVALID;
 	case -EEXIST: return ERR_EXIST;
 	case -ENOENT: case -ESRCH: case -ENXIO: case -ENODEV: return ERR_NOENTITY;
-	case -ECONNREFUSED: case -ENONET: case -EHOSTDOWN: case -ENETDOWN: return ERR_CONNECTIONREFUSED;
+	case -ECONNREFUSED:
+#ifdef ENONET
+	case -ENONET:
+#endif
+	case -EHOSTDOWN: case -ENETDOWN: return ERR_CONNECTIONREFUSED;
 	case -EPROTO: case -EBADMSG: return ERR_PROTOCOL;
-	case -ETIMEDOUT: case -ETIME: return ERR_TIMEOUT;
+	case -ETIMEDOUT:
+#ifdef ETIME
+	case -ETIME:
+#endif
+		return ERR_TIMEOUT;
 #ifdef ENOKEY
 	case -ENOKEY: return ERR_AUTHKEY;
 #endif
@@ -285,6 +287,9 @@ enum {
 	 * BOTH DIRECTIONS */
 	COMMAND_REGISTER_MEMFD_SHMID,
 
+	/* Supported since protocol v35 (15.0) */
+	COMMAND_SEND_OBJECT_MESSAGE,
+
 	COMMAND_MAX
 };
 
@@ -417,4 +422,6 @@ static uint32_t port_type_value(const char *port_type)
 
 #define METADATA_DEFAULT_SINK           "default.audio.sink"
 #define METADATA_DEFAULT_SOURCE         "default.audio.source"
+#define METADATA_CONFIG_DEFAULT_SINK    "default.configured.audio.sink"
+#define METADATA_CONFIG_DEFAULT_SOURCE  "default.configured.audio.source"
 #define METADATA_TARGET_NODE            "target.node"

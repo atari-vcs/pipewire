@@ -34,6 +34,7 @@
 #include <spa/support/loop.h>
 #include <spa/utils/list.h>
 #include <spa/utils/keys.h>
+#include <spa/utils/json.h>
 #include <spa/node/node.h>
 #include <spa/node/utils.h>
 #include <spa/node/io.h>
@@ -86,6 +87,7 @@ struct port {
 
 	bool have_format;
 	struct spa_audio_info current_format;
+	uint32_t blocks;
 	size_t bpf;
 
 	struct buffer buffers[MAX_BUFFERS];
@@ -367,7 +369,10 @@ port_enum_formats(struct impl *this,
 		spa_pod_builder_add(builder,
 			SPA_FORMAT_mediaType,      SPA_POD_Id(SPA_MEDIA_TYPE_audio),
 			SPA_FORMAT_mediaSubtype,   SPA_POD_Id(SPA_MEDIA_SUBTYPE_raw),
-			SPA_FORMAT_AUDIO_format,   SPA_POD_Id(SPA_AUDIO_FORMAT_F32),
+			SPA_FORMAT_AUDIO_format,   SPA_POD_CHOICE_ENUM_Id(3,
+								SPA_AUDIO_FORMAT_F32P,
+								SPA_AUDIO_FORMAT_F32P,
+								SPA_AUDIO_FORMAT_F32),
 			0);
 
 		if (this->props.rate != 0) {
@@ -385,7 +390,7 @@ port_enum_formats(struct impl *this,
 				0);
 		} else {
 			spa_pod_builder_add(builder,
-				SPA_FORMAT_AUDIO_rate, SPA_POD_CHOICE_RANGE_Int(DEFAULT_CHANNELS, 1, INT32_MAX),
+				SPA_FORMAT_AUDIO_channels, SPA_POD_CHOICE_RANGE_Int(DEFAULT_CHANNELS, 1, INT32_MAX),
 				0);
 		}
 		if (this->props.n_pos != 0) {
@@ -455,7 +460,7 @@ impl_node_port_enum_params(void *object, int seq,
 		param = spa_pod_builder_add_object(&b,
 			SPA_TYPE_OBJECT_ParamBuffers, id,
 			SPA_PARAM_BUFFERS_buffers, SPA_POD_CHOICE_RANGE_Int(1, 1, MAX_BUFFERS),
-			SPA_PARAM_BUFFERS_blocks,  SPA_POD_Int(1),
+			SPA_PARAM_BUFFERS_blocks,  SPA_POD_Int(port->blocks),
 			SPA_PARAM_BUFFERS_size,    SPA_POD_CHOICE_RANGE_Int(
 							MAX_SAMPLES * port->bpf,
 							16 * port->bpf,
@@ -526,10 +531,15 @@ port_set_format(struct impl *this,
 		if (spa_format_audio_raw_parse(format, &info.info.raw) < 0)
 			return -EINVAL;
 
-		if (info.info.raw.format != SPA_AUDIO_FORMAT_F32)
+		if (info.info.raw.format == SPA_AUDIO_FORMAT_F32) {
+			port->bpf = 4 * info.info.raw.channels;
+			port->blocks = 1;
+		} else if (info.info.raw.format == SPA_AUDIO_FORMAT_F32P) {
+			port->bpf = 4;
+			port->blocks = info.info.raw.channels;
+		} else
 			return -EINVAL;
 
-		port->bpf = 4 * info.info.raw.channels;
 		port->current_format = info;
 		port->have_format = true;
 	}
@@ -714,14 +724,30 @@ impl_get_size(const struct spa_handle_factory *factory,
 	return sizeof(struct impl);
 }
 
-static uint32_t channel_from_name(const char *name, size_t len)
+static uint32_t channel_from_name(const char *name)
 {
 	int i;
 	for (i = 0; spa_type_audio_channel[i].name; i++) {
-		if (strncmp(name, spa_debug_type_short_name(spa_type_audio_channel[i].name), len) == 0)
+		if (strcmp(name, spa_debug_type_short_name(spa_type_audio_channel[i].name)) == 0)
 			return spa_type_audio_channel[i].type;
 	}
 	return SPA_AUDIO_CHANNEL_UNKNOWN;
+}
+
+static inline void parse_position(struct impl *this, const char *val, size_t len)
+{
+	struct spa_json it[2];
+	char v[256];
+
+	spa_json_init(&it[0], val, len);
+        if (spa_json_enter_array(&it[0], &it[1]) <= 0)
+                spa_json_init(&it[1], val, len);
+
+	this->props.n_pos = 0;
+	while (spa_json_get_string(&it[1], v, sizeof(v)) > 0 &&
+	    this->props.n_pos < SPA_AUDIO_MAX_CHANNELS) {
+		this->props.pos[this->props.n_pos++] = channel_from_name(v);
+	}
 }
 
 static int
@@ -800,19 +826,14 @@ impl_init(const struct spa_handle_factory *factory,
 	spa_loop_add_source(this->data_loop, &this->timer_source);
 
 	for (i = 0; info && i < info->n_items; i++) {
-		if (!strcmp(info->items[i].key, SPA_KEY_AUDIO_CHANNELS)) {
-			this->props.channels = atoi(info->items[i].value);
-		} else if (!strcmp(info->items[i].key, SPA_KEY_AUDIO_RATE)) {
-			this->props.rate = atoi(info->items[i].value);
-		} else if (!strcmp(info->items[i].key, SPA_KEY_AUDIO_POSITION)) {
-			size_t len;
-			const char *p = info->items[i].value;
-			while (*p && this->props.n_pos < SPA_AUDIO_MAX_CHANNELS) {
-				if ((len = strcspn(p, ",")) == 0)
-					break;
-				this->props.pos[this->props.n_pos++] = channel_from_name(p, len);
-				p += len + strspn(p+len, ",");
-			}
+		const char *k = info->items[i].key;
+		const char *s = info->items[i].value;
+		if (!strcmp(k, SPA_KEY_AUDIO_CHANNELS)) {
+			this->props.channels = atoi(s);
+		} else if (!strcmp(k, SPA_KEY_AUDIO_RATE)) {
+			this->props.rate = atoi(s);
+		} else if (!strcmp(k, SPA_KEY_AUDIO_POSITION)) {
+			parse_position(this, s, strlen(s));
 		}
 	}
 	if (this->props.n_pos > 0)

@@ -69,7 +69,7 @@ pipewire_module_link_factory = shared_library('pipewire-module-link-factory',
 
 pipewire_module_protocol_deps = [mathlib, dl_lib, pipewire_dep]
 
-if get_option('systemd')
+if systemd_dep.found()
   pipewire_module_protocol_deps += systemd_dep
 endif
 
@@ -149,6 +149,7 @@ test('pw-test-protocol-native',
 			install_dir : installed_tests_execdir),
 	env : [
 		'SPA_PLUGIN_DIR=@0@/spa/plugins/'.format(meson.build_root()),
+		'PIPEWIRE_CONFIG_DIR=@0@/src/daemon/'.format(meson.build_root()),
 		'PIPEWIRE_MODULE_DIR=@0@/src/modules/'.format(meson.build_root())
 	])
 

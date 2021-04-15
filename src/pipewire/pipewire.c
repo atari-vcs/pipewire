@@ -60,7 +60,7 @@ struct handle {
 	struct plugin *plugin;
 	char *factory_name;
 	int ref;
-	struct spa_handle handle;
+	struct spa_handle handle SPA_ALIGNED(8);
 };
 
 struct registry {
@@ -426,7 +426,8 @@ void pw_init(int *argc, char **argv[])
 
 	if (pw_log_is_default()) {
 		n_items = 0;
-		items[n_items++] = SPA_DICT_ITEM_INIT(SPA_KEY_LOG_COLORS, "true");
+		if (getenv("NO_COLOR") == NULL)
+			items[n_items++] = SPA_DICT_ITEM_INIT(SPA_KEY_LOG_COLORS, "true");
 		items[n_items++] = SPA_DICT_ITEM_INIT(SPA_KEY_LOG_TIMESTAMP, "true");
 		items[n_items++] = SPA_DICT_ITEM_INIT(SPA_KEY_LOG_LINE, "true");
 		snprintf(level, sizeof(level), "%d", pw_log_level);
@@ -440,9 +441,12 @@ void pw_init(int *argc, char **argv[])
 			pw_log_set(log);
 
 #ifdef HAVE_SYSTEMD
-		log = load_journal_logger(support);
-		if (log)
-			pw_log_set(log);
+		if ((str = getenv("PIPEWIRE_LOG_SYSTEMD")) == NULL ||
+				strcmp(str, "true") == 0 || atoi(str) != 0) {
+			log = load_journal_logger(support);
+			if (log)
+				pw_log_set(log);
+		}
 #endif
 	} else {
 		support->support[support->n_support++] =
@@ -540,7 +544,7 @@ const char *pw_get_prgname(void)
 			return prgname;
 	}
 #endif
-	snprintf(prgname, sizeof(prgname)-1, "pid-%d", getpid());
+	snprintf(prgname, sizeof(prgname), "pid-%d", getpid());
 	return prgname;
 }
 
@@ -594,7 +598,6 @@ const char *pw_get_client_name(void)
 	else {
 		if (snprintf(cname, sizeof(cname), "pipewire-pid-%zd", (size_t) getpid()) < 0)
 			return NULL;
-		cname[255] = 0;
 		return cname;
 	}
 }
