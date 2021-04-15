@@ -76,7 +76,15 @@ struct impl {
 
 	uint64_t info_all;
 	struct spa_node_info info;
+#define IDX_EnumFormat		0
+#define IDX_PropInfo		1
+#define IDX_Props		2
+#define IDX_Format		3
+#define IDX_EnumPortConfig	4
+#define IDX_PortConfig		5
 	struct spa_param_info params[6];
+	uint32_t convert_params_flags[6];
+	uint32_t follower_params_flags[6];
 
 	struct spa_hook_list hooks;
 	struct spa_callbacks callbacks;
@@ -95,7 +103,6 @@ static int impl_node_enum_params(void *object, int seq,
 				 const struct spa_pod *filter)
 {
 	struct impl *this = object;
-	struct spa_pod *param;
 	struct spa_pod_builder b = { 0 };
 	uint8_t buffer[1024];
 	struct spa_result_node_params result;
@@ -117,24 +124,37 @@ next:
 	switch (id) {
 	case SPA_PARAM_EnumPortConfig:
 	case SPA_PARAM_PortConfig:
+		res = spa_node_enum_params(this->convert, seq, id, start, num, filter);
+		return res;
 	case SPA_PARAM_PropInfo:
 	case SPA_PARAM_Props:
-		return spa_node_enum_params(this->convert, seq, id, start, num, filter);
-
+	{
+		if (result.next < 0x10000) {
+			if ((res = spa_node_enum_params_sync(this->convert,
+					id, &result.next, filter, &result.param, &b)) == 1)
+				break;
+			result.next = 0x10000;
+		}
+		if (result.next >= 0x10000) {
+			result.next &= 0xffff;
+			if ((res = spa_node_enum_params_sync(this->follower,
+					id, &result.next, filter, &result.param, &b)) == 1) {
+				result.next |= 0x10000;
+				break;
+			}
+		}
+		return res;
+	}
 	case SPA_PARAM_EnumFormat:
 	case SPA_PARAM_Format:
 		if ((res = spa_node_port_enum_params_sync(this->follower,
 				this->direction, 0,
-				id, &result.next, filter, &param, &b)) != 1)
-			return res;
-		break;
-
+				id, &result.next, filter, &result.param, &b)) == 1)
+			break;
+		return res;
 	default:
 		return -ENOENT;
 	}
-
-	if (spa_pod_filter(&b, &result.param, param, filter) < 0)
-		goto next;
 
 	spa_node_emit_result(&this->hooks, seq, 0, SPA_RESULT_TYPE_NODE_PARAMS, &result);
 
@@ -194,9 +214,19 @@ static int link_io(struct impl *this)
 
 static void emit_node_info(struct impl *this, bool full)
 {
+	uint32_t i;
+
 	if (full)
 		this->info.change_mask = this->info_all;
 	if (this->info.change_mask) {
+		if (this->info.change_mask & SPA_NODE_CHANGE_MASK_PARAMS) {
+			for (i = 0; i < SPA_N_ELEMENTS(this->params); i++) {
+				if (this->params[i].user > 0) {
+					this->params[i].flags ^= SPA_PARAM_INFO_SERIAL;
+					this->params[i].user = 0;
+				}
+			}
+		}
 		spa_node_emit_info(&this->hooks, &this->info);
 		this->info.change_mask = 0;
 	}
@@ -381,7 +411,7 @@ static int configure_format(struct impl *this, uint32_t flags, const struct spa_
 static int impl_node_set_param(void *object, uint32_t id, uint32_t flags,
 			       const struct spa_pod *param)
 {
-	int res = 0;
+	int res = 0, res2 = 0;
 	struct impl *this = object;
 	struct spa_audio_info info = { 0 };
 
@@ -415,10 +445,12 @@ static int impl_node_set_param(void *object, uint32_t id, uint32_t flags,
 		break;
 
 	case SPA_PARAM_Props:
-		if (this->target != this->follower) {
-			if ((res = spa_node_set_param(this->target, id, flags, param)) < 0)
-				return res;
-		}
+		if (this->target != this->follower)
+			res = spa_node_set_param(this->target, id, flags, param);
+		res = spa_node_set_param(this->follower, id, flags, param);
+		if (res < 0 && res2 < 0)
+			return res;
+		res = 0;
 		break;
 	default:
 		res = -ENOTSUP;
@@ -458,15 +490,11 @@ static int negotiate_format(struct impl *this)
 
 	spa_log_debug(this->log, NAME " %p: negiotiate", this);
 
-	state = 0;
-	format = NULL;
-
 	spa_node_send_command(this->follower,
 			&SPA_NODE_COMMAND_INIT(SPA_NODE_COMMAND_ParamBegin));
 
-	if (this->have_format)
-		format = spa_format_audio_raw_build(&b, SPA_PARAM_Format, &this->follower_current_format.info.raw);
-
+	state = 0;
+	format = NULL;
 	if ((res = spa_node_port_enum_params_sync(this->follower,
 				this->direction, 0,
 				SPA_PARAM_EnumFormat, &state,
@@ -571,20 +599,30 @@ static void convert_node_info(void *data, const struct spa_node_info *info)
 	}
 	if (info->change_mask & SPA_NODE_CHANGE_MASK_PARAMS) {
 		for (i = 0; i < info->n_params; i++) {
-			uint32_t idx = SPA_ID_INVALID;
+			uint32_t idx;
 
 			switch (info->params[i].id) {
 			case SPA_PARAM_PropInfo:
-				idx = 1;
+				idx = IDX_PropInfo;
 				break;
 			case SPA_PARAM_Props:
-				idx = 2;
+				idx = IDX_Props;
 				break;
+			default:
+				continue;
 			}
-			if (idx != SPA_ID_INVALID) {
-				this->params[idx] = info->params[i];
-				this->info.change_mask |= SPA_NODE_CHANGE_MASK_PARAMS;
-			}
+			if (!this->add_listener &&
+			    this->convert_params_flags[idx] == info->params[i].flags)
+				continue;
+
+			this->info.change_mask |= SPA_NODE_CHANGE_MASK_PARAMS;
+			this->convert_params_flags[idx] = info->params[i].flags;
+			this->params[idx].flags =
+				(this->params[idx].flags & SPA_PARAM_INFO_SERIAL) |
+				(info->params[i].flags & SPA_PARAM_INFO_READWRITE);
+
+			if (!this->add_listener)
+				this->params[idx].user++;
 		}
 	}
 	emit_node_info(this, false);
@@ -626,6 +664,7 @@ static const struct spa_node_events convert_node_events = {
 static void follower_info(void *data, const struct spa_node_info *info)
 {
 	struct impl *this = data;
+	uint32_t i;
 
 	this->async = (info->flags & SPA_NODE_FLAG_ASYNC) != 0;
 
@@ -644,8 +683,33 @@ static void follower_info(void *data, const struct spa_node_info *info)
 	if (info->change_mask & SPA_NODE_CHANGE_MASK_PROPS) {
 		this->info.change_mask |= SPA_NODE_CHANGE_MASK_PROPS;
 		this->info.props = info->props;
-		emit_node_info(this, false);
 	}
+	if (info->change_mask & SPA_NODE_CHANGE_MASK_PARAMS) {
+		for (i = 0; i < info->n_params; i++) {
+			uint32_t idx;
+
+			switch (info->params[i].id) {
+			case SPA_PARAM_Props:
+				idx = IDX_Props;
+				break;
+			default:
+				continue;
+			}
+			if (!this->add_listener &&
+			    this->follower_params_flags[idx] == info->params[i].flags)
+				continue;
+
+			this->info.change_mask |= SPA_NODE_CHANGE_MASK_PARAMS;
+			this->follower_params_flags[idx] = info->params[i].flags;
+			this->params[idx].flags =
+				(this->params[idx].flags & SPA_PARAM_INFO_SERIAL) |
+				(info->params[i].flags & SPA_PARAM_INFO_READWRITE);
+
+			if (!this->add_listener)
+				this->params[idx].user++;
+		}
+	}
+	emit_node_info(this, false);
 }
 
 static void follower_port_info(void *data,
@@ -655,21 +719,32 @@ static void follower_port_info(void *data,
 	struct impl *this = data;
 	uint32_t i;
 
-	for (i = 0; i < info->n_params; i++) {
-		uint32_t idx = SPA_ID_INVALID;
+	if (info->change_mask & SPA_PORT_CHANGE_MASK_PARAMS) {
+		for (i = 0; i < info->n_params; i++) {
+			uint32_t idx;
 
-		switch (info->params[i].id) {
-		case SPA_PARAM_Format:
-			idx = 3;
-			break;
-		}
-		if (idx != SPA_ID_INVALID) {
-			this->params[idx] = info->params[i];
+			switch (info->params[i].id) {
+			case SPA_PARAM_Format:
+				idx = IDX_Format;
+				break;
+			default:
+				continue;
+			}
+			if (!this->add_listener &&
+			    this->follower_params_flags[idx] == info->params[i].flags)
+				continue;
+
 			this->info.change_mask |= SPA_NODE_CHANGE_MASK_PARAMS;
+			this->follower_params_flags[idx] = info->params[i].flags;
+			this->params[idx].flags =
+				(this->params[idx].flags & SPA_PARAM_INFO_SERIAL) |
+				(info->params[i].flags & SPA_PARAM_INFO_READWRITE);
+
+			if (!this->add_listener)
+				this->params[idx].user++;
 		}
 	}
-	if (!this->add_listener)
-		emit_node_info(this, false);
+	emit_node_info(this, false);
 }
 
 static const struct spa_node_events follower_node_events = {
@@ -732,9 +807,9 @@ static int impl_node_add_listener(void *object,
 	spa_log_trace(this->log, NAME" %p: add listener %p", this, listener);
 	spa_hook_list_isolate(&this->hooks, &save, listener, events, data);
 
-	this->add_listener = true;
 
 	if (events->info || events->port_info) {
+		this->add_listener = true;
 
 		spa_zero(l);
 		spa_node_add_listener(this->follower, &l, &follower_node_events, this);
@@ -744,12 +819,11 @@ static int impl_node_add_listener(void *object,
 			spa_zero(l);
 			spa_node_add_listener(this->convert, &l, &convert_node_events, this);
 			spa_hook_remove(&l);
-		} else {
-			emit_node_info(this, false);
 		}
-	}
-	this->add_listener = false;
+		this->add_listener = false;
 
+		emit_node_info(this, true);
+	}
 	spa_hook_list_join(&this->hooks, &save);
 
 	return 0;
@@ -944,7 +1018,7 @@ static int impl_node_process(void *object)
 				break;
 		}
 	} else if (!this->driver) {
-		bool done;
+		bool done = false;
 		while (true) {
 			/* output node (source). First run the converter to make
 			 * sure we push out any queued data. Then when it needs
@@ -971,9 +1045,9 @@ static int impl_node_process(void *object)
 					status = fstatus;
 					break;
 				}
-				/* if the follower didn't produce more data
-				 * we can stop now */
-				if ((fstatus & SPA_STATUS_HAVE_DATA) == 0)
+				/* if the follower didn't produce more data or is
+				 * not drained we can stop now */
+				if ((fstatus & (SPA_STATUS_HAVE_DATA | SPA_STATUS_DRAINED)) == 0)
 					break;
 			}
 			/* converter produced something or is drained and we
@@ -981,7 +1055,7 @@ static int impl_node_process(void *object)
 			if (done)
 				break;
 		}
-		if (!(status & SPA_STATUS_HAVE_DATA))
+		if (!done)
 			spa_node_call_xrun(&this->callbacks, 0, 0, NULL);
 
 	} else {
@@ -1138,12 +1212,12 @@ impl_init(const struct spa_handle_factory *factory,
 		SPA_NODE_FLAG_IN_PORT_CONFIG |
 		SPA_NODE_FLAG_OUT_PORT_CONFIG |
 		SPA_NODE_FLAG_NEED_CONFIGURE;
-	this->params[0] = SPA_PARAM_INFO(SPA_PARAM_EnumFormat, SPA_PARAM_INFO_READ);
-	this->params[1] = SPA_PARAM_INFO(SPA_PARAM_PropInfo, SPA_PARAM_INFO_READ);
-	this->params[2] = SPA_PARAM_INFO(SPA_PARAM_Props, SPA_PARAM_INFO_READWRITE);
-	this->params[3] = SPA_PARAM_INFO(SPA_PARAM_Format, SPA_PARAM_INFO_WRITE);
-	this->params[4] = SPA_PARAM_INFO(SPA_PARAM_EnumPortConfig, SPA_PARAM_INFO_READ);
-	this->params[5] = SPA_PARAM_INFO(SPA_PARAM_PortConfig, SPA_PARAM_INFO_READWRITE);
+	this->params[IDX_EnumFormat] = SPA_PARAM_INFO(SPA_PARAM_EnumFormat, SPA_PARAM_INFO_READ);
+	this->params[IDX_PropInfo] = SPA_PARAM_INFO(SPA_PARAM_PropInfo, SPA_PARAM_INFO_READ);
+	this->params[IDX_Props] = SPA_PARAM_INFO(SPA_PARAM_Props, SPA_PARAM_INFO_READWRITE);
+	this->params[IDX_Format] = SPA_PARAM_INFO(SPA_PARAM_Format, SPA_PARAM_INFO_WRITE);
+	this->params[IDX_EnumPortConfig] = SPA_PARAM_INFO(SPA_PARAM_EnumPortConfig, SPA_PARAM_INFO_READ);
+	this->params[IDX_PortConfig] = SPA_PARAM_INFO(SPA_PARAM_PortConfig, SPA_PARAM_INFO_READWRITE);
 	this->info.params = this->params;
 	this->info.n_params = 6;
 

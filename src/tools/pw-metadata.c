@@ -68,7 +68,7 @@ static int metadata_property(void *data, uint32_t id,
 
 	if ((d->opt_id == SPA_ID_INVALID || d->opt_id == id) &&
 	    (d->opt_key == NULL || strcmp(d->opt_key, key) == 0)) {
-		if (value == NULL && key == NULL) {
+		if (key == NULL) {
 			fprintf(stdout, "remove: id:%u all keys\n", id);
 		} else if (value == NULL) {
 			fprintf(stdout, "remove: id:%u key:'%s'\n", id, key);
@@ -240,6 +240,10 @@ int main(int argc, char *argv[])
 		data.opt_type = argv[optind++];
 
 	data.loop = pw_main_loop_new(NULL);
+	if (data.loop == NULL) {
+		fprintf(stderr, "can't create mainloop: %m\n");
+		return -1;
+	}
 	pw_loop_add_signal(pw_main_loop_get_loop(data.loop), SIGINT, do_quit, &data);
 	pw_loop_add_signal(pw_main_loop_get_loop(data.loop), SIGTERM, do_quit, &data);
 

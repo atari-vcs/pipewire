@@ -79,11 +79,15 @@ struct pw_manager_object {
 	uint32_t version;
 	struct pw_properties *props;
 	struct pw_proxy *proxy;
+	char *message_object_path;
+	int (*message_handler)(struct pw_manager *m, struct pw_manager_object *o,
+	                       const char *message, const char *params, char **response);
 
 	int changed;
 	void *info;
 	struct spa_list param_list;
 	unsigned int creating:1;
+	unsigned int removing:1;
 };
 
 struct pw_manager *pw_manager_new(struct pw_core *core);
@@ -92,16 +96,20 @@ void pw_manager_add_listener(struct pw_manager *manager,
 		struct spa_hook *listener,
 		const struct pw_manager_events *events, void *data);
 
+int pw_manager_sync(struct pw_manager *manager);
+
 void pw_manager_destroy(struct pw_manager *manager);
 
 int pw_manager_set_metadata(struct pw_manager *manager,
-		struct pw_manager_object *metdata,
+		struct pw_manager_object *metadata,
 		uint32_t subject, const char *key, const char *type,
 		const char *format, ...) SPA_PRINTF_FUNC(6,7);
 
 int pw_manager_for_each_object(struct pw_manager *manager,
 		int (*callback) (void *data, struct pw_manager_object *object),
 		void *data);
+
+void *pw_manager_object_add_data(struct pw_manager_object *o, const char *id, size_t size);
 
 #ifdef __cplusplus
 } /* extern "C" */

@@ -108,10 +108,12 @@ extern "C" {
 #define SPA_KEY_API_BLUEZ5		"api.bluez5"			/**< key for the bluez5 api */
 #define SPA_KEY_API_BLUEZ5_PATH		"api.bluez5.path"		/**< a bluez5 path */
 #define SPA_KEY_API_BLUEZ5_DEVICE	"api.bluez5.device"		/**< an internal bluez5 device */
+#define SPA_KEY_API_BLUEZ5_CONNECTION	"api.bluez5.connection"		/**< bluez5 device connection status */
 #define SPA_KEY_API_BLUEZ5_TRANSPORT	"api.bluez5.transport"		/**< an internal bluez5 transport */
 #define SPA_KEY_API_BLUEZ5_PROFILE	"api.bluez5.profile"		/**< a bluetooth profile */
 #define SPA_KEY_API_BLUEZ5_ADDRESS	"api.bluez5.address"		/**< a bluetooth address */
 #define SPA_KEY_API_BLUEZ5_CODEC	"api.bluez5.codec"		/**< a bluetooth codec */
+#define SPA_KEY_API_BLUEZ5_CLASS	"api.bluez5.class"		/**< a bluetooth class */
 
 /** keys for jack api */
 #define SPA_KEY_API_JACK		"api.jack"			/**< key for the JACK api */

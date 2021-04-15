@@ -38,6 +38,7 @@ install_headers(spa_graph_headers,
 spa_monitor_headers = [
   'monitor/device.h',
   'monitor/event.h',
+  'monitor/type-info.h',
   'monitor/utils.h',
 ]
 
@@ -137,3 +138,11 @@ spa_video_headers = [
 
 install_headers(spa_video_headers,
   subdir : join_paths(spa_name, 'spa', 'param', 'video'))
+
+spa_bluetooth_headers = [
+  'param/bluetooth/audio.h',
+  'param/bluetooth/type-info.h',
+]
+
+install_headers(spa_bluetooth_headers,
+  subdir : join_paths(spa_name, 'spa', 'param', 'bluetooth'))

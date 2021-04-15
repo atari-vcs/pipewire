@@ -1,6 +1,6 @@
 /* PipeWire
  *
- * Copyright © 2020 Wim Taymans
+ * Copyright © 2018 Wim Taymans
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -22,16 +22,15 @@
  * DEALINGS IN THE SOFTWARE.
  */
 
+#include <limits.h>
 #include <signal.h>
 #include <getopt.h>
+#include <libgen.h>
 
 #include <spa/utils/result.h>
-
-#include <pipewire/impl.h>
+#include <pipewire/pipewire.h>
 
 #include "config.h"
-
-static const char *address;
 
 static void do_quit(void *data, int signal_number)
 {
@@ -39,17 +38,14 @@ static void do_quit(void *data, int signal_number)
 	pw_main_loop_quit(loop);
 }
 
-static void show_help(const char *name)
+static void show_help(const char *name, const char *config_name)
 {
-	fprintf(stdout, "%s [options]\n\n"
-		"Start a pulseaudio compatible daemon.\n\n"
+	fprintf(stdout, "%s [options]\n"
 		"  -h, --help                            Show this help\n"
 		"      --version                         Show version\n"
-		"  -a  --address                         comma separated list of addresses (Default %s)\n"
-		"                                           unix:<socket-name>\n"
-		"                                           tcp:[<ip>][:<port>]\n",
+		"  -c, --config                          Load config (Default %s)\n",
 		name,
-		address);
+		config_name);
 }
 
 int main(int argc, char *argv[])
@@ -57,23 +53,29 @@ int main(int argc, char *argv[])
 	struct pw_context *context;
 	struct pw_main_loop *loop;
 	struct pw_properties *properties;
-	char *args;
 	static const struct option long_options[] = {
 		{ "help",	no_argument,		NULL, 'h' },
 		{ "version",	no_argument,		NULL, 'V' },
-		{ "address",	required_argument,	NULL, 'a' },
+		{ "config",	required_argument,	NULL, 'c' },
+
 		{ NULL, 0, NULL, 0}
 	};
 	int c;
+	char path[PATH_MAX];
+	const char *config_name;
+
+	if (setenv("PIPEWIRE_INTERNAL", "1", 1) < 0)
+		fprintf(stderr, "can't set PIPEWIRE_INTERNAL env: %m");
+
+	snprintf(path, sizeof(path), "%s.conf", argv[0]);
+	config_name = basename(path);
 
 	pw_init(&argc, &argv);
 
-	address = "unix:native";
-
-	while ((c = getopt_long(argc, argv, "hVa:", long_options, NULL)) != -1) {
+	while ((c = getopt_long(argc, argv, "hVc:", long_options, NULL)) != -1) {
 		switch (c) {
 		case 'h':
-			show_help(argv[0]);
+			show_help(argv[0], config_name);
 			return 0;
 		case 'V':
 			fprintf(stdout, "%s\n"
@@ -83,9 +85,8 @@ int main(int argc, char *argv[])
 				pw_get_headers_version(),
 				pw_get_library_version());
 			return 0;
-		case 'a':
-			address = optarg;
-			fprintf(stdout, "set address %s\n", address);
+		case 'c':
+			config_name = optarg;
 			break;
 		default:
 			return -1;
@@ -93,7 +94,7 @@ int main(int argc, char *argv[])
 	}
 
 	properties = pw_properties_new(
-				PW_KEY_CONTEXT_PROFILE_MODULES, "default,rtkit",
+				PW_KEY_CONFIG_NAME, config_name,
 				NULL);
 
 	loop = pw_main_loop_new(&properties->dict);
@@ -111,19 +112,10 @@ int main(int argc, char *argv[])
 		return -1;
 	}
 
-	args = spa_aprintf("server.address=\"%s\"", address);
-	if (pw_context_load_module(context,
-				"libpipewire-module-protocol-pulse",
-				args, NULL) == NULL) {
-		pw_log_error("failed to create pulse module: %m");
-		return -1;
-	}
-
 	pw_log_info("start main loop");
 	pw_main_loop_run(loop);
 	pw_log_info("leave main loop");
 
-	free(args);
 	pw_context_destroy(context);
 	pw_main_loop_destroy(loop);
 	pw_deinit();

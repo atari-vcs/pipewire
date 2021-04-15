@@ -971,6 +971,7 @@ static void clear_mix(struct node_data *data, struct mix *mix)
 
 	spa_list_remove(&mix->mix.link);
 	spa_list_append(&data->free_mix, &mix->link);
+	pw_impl_port_release_mix(mix->port, &mix->mix);
 }
 
 static void clean_node(struct node_data *d)
@@ -1218,7 +1219,7 @@ static struct pw_proxy *node_export(struct pw_core *core, void *object, bool do_
 	if ((str = pw_properties_get(node->properties, "mem.allow-mlock")) != NULL)
 		data->allow_mlock = pw_properties_parse_bool(str);
 
-	data->warn_mlock = true;
+	data->warn_mlock = data->context->defaults.mem_warn_mlock;
 	if ((str = pw_properties_get(node->properties, "mem.warn-mlock")) != NULL)
 		data->warn_mlock = pw_properties_parse_bool(str);
 

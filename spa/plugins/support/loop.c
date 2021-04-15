@@ -187,7 +187,7 @@ loop_invoke(void *object,
 	item->func = func;
 	item->seq = seq;
 	item->size = size;
-	item->block = block;
+	item->block = block && !in_thread;
 	item->user_data = user_data;
 
 	spa_log_trace(impl->log, NAME " %p: add item %p filled:%d", impl, item, filled);
@@ -213,7 +213,7 @@ loop_invoke(void *object,
 		loop_signal_event(impl, impl->wakeup);
 	}
 
-	if (block) {
+	if (block && !in_thread) {
 		uint64_t count = 1;
 
 		spa_loop_control_hook_before(&impl->hooks_list);
@@ -453,7 +453,7 @@ error_exit:
 static void source_event_func(struct spa_source *source)
 {
 	struct source_impl *impl = SPA_CONTAINER_OF(source, struct source_impl, source);
-	uint64_t count;
+	uint64_t count = 0;
 	int res;
 
 	if ((res = spa_system_eventfd_read(impl->impl->system, source->fd, &count)) < 0)
@@ -516,7 +516,7 @@ static int loop_signal_event(void *object, struct spa_source *source)
 static void source_timer_func(struct spa_source *source)
 {
 	struct source_impl *impl = SPA_CONTAINER_OF(source, struct source_impl, source);
-	uint64_t expirations;
+	uint64_t expirations = 0;
 	int res;
 
 	if (SPA_UNLIKELY((res = spa_system_timerfd_read(impl->impl->system,
@@ -596,7 +596,7 @@ loop_update_timer(void *object, struct spa_source *source,
 static void source_signal_func(struct spa_source *source)
 {
 	struct source_impl *impl = SPA_CONTAINER_OF(source, struct source_impl, source);
-	int res, signal_number;
+	int res, signal_number = 0;
 
 	if ((res = spa_system_signalfd_read(impl->impl->system, source->fd, &signal_number)) < 0)
 		spa_log_warn(impl->impl->log, NAME " %p: failed to read signal fd %d: %s",

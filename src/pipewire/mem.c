@@ -60,6 +60,10 @@ static inline int memfd_create(const char *name, unsigned int flags)
 #define HAVE_MEMFD_CREATE 1
 #endif
 
+#ifdef __FreeBSD__
+#define MAP_LOCKED 0
+#endif
+
 /* memfd_create(2) flags */
 
 #ifndef MFD_CLOEXEC
@@ -295,6 +299,9 @@ static struct mapping * memblock_map(struct memblock *b,
 		fl |= MAP_PRIVATE;
 	else
 		fl |= MAP_SHARED;
+
+	if (flags & PW_MEMMAP_FLAG_LOCKED)
+		fl |= MAP_LOCKED;
 
 	if (flags & PW_MEMMAP_FLAG_TWICE) {
 		pw_log_error(NAME" %p: implement me PW_MEMMAP_FLAG_TWICE", p);
