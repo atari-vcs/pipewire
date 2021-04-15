@@ -1,8 +1,13 @@
-pipewire (0.3.25-1apertis1) UNRELEASED; urgency=medium
+pipewire (0.3.25-1apertis1) apertis; urgency=medium
 
-  * PLEASE SUMMARIZE remaining Apertis changes
+  * Disable build-depends
+    - libsdl2 (not needed)
+    - libjack-jackd2-dev (not needed)
+    - libopenaptx-dev (proprietary codec, unknown legal status)
+  * Drop debian/apertis/gitlab-ci.yml, no longer needed
+  * Enable pipewire pulse units by default
 
- -- Apertis CI <devel@lists.apertis.org>  Thu, 15 Apr 2021 14:40:14 +0000
+ -- Sjoerd Simons <sjoerd@collabora.com>  Thu, 15 Apr 2021 14:40:14 +0000
 
 pipewire (0.3.25-1) experimental; urgency=medium
 

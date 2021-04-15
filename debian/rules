@@ -33,6 +33,10 @@ override_dh_auto_configure:
 		-Dvideotestsrc=enabled \
 		-Dvolume=enabled \
 		-Dvulkan=disabled \
+		-Dsdl2=disabled \
+		-Dpipewire-jack=disabled \
+		-Dbluez5-codec-aptx=disabled \
+		-Djack=disabled \
 		$(NULL)
 	install -d debian/ld.so.conf.d
 	echo "/usr/lib/$(DEB_HOST_MULTIARCH)/pipewire-0.3/jack/" > "debian/ld.so.conf.d/pipewire-jack-$(DEB_HOST_MULTIARCH).conf"
