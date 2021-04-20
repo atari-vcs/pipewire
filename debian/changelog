@@ -1,3 +1,9 @@
+pipewire (0.3.25-1apertis2) apertis; urgency=medium
+
+  * Enable pulseaudio compatibility later by default
+
+ -- Sjoerd Simons <sjoerd@collabora.com>  Tue, 20 Apr 2021 11:18:09 +0200
+
 pipewire (0.3.25-1apertis1) apertis; urgency=medium
 
   * Disable build-depends
