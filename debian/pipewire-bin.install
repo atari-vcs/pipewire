@@ -5,6 +5,7 @@ etc/pipewire/media-session.d/alsa-monitor.conf
 etc/pipewire/media-session.d/bluez-monitor.conf
 etc/pipewire/media-session.d/media-session.conf
 etc/pipewire/media-session.d/v4l2-monitor.conf
+etc/pipewire/media-session.d/with-pulseaudio
 etc/pipewire/pipewire-pulse.conf
 etc/pipewire/pipewire.conf
 lib/udev/rules.d

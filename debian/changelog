@@ -1,8 +1,15 @@
-pipewire (0.3.25-1apertis1vcs1) atari; urgency=medium
+pipewire (0.3.25-1apertis2vcs1) atari; urgency=medium
 
-  * Disable ldac support; pulls in too many dependencies
+  * Remaining atari changes:
+    * Disable ldac support; pulls in too many dependencies
 
  -- Sjoerd Simons <sjoerd@collabora.com>  Tue, 20 Apr 2021 10:56:28 +0200
+
+pipewire (0.3.25-1apertis2) apertis; urgency=medium
+
+  * Enable pulseaudio compatibility later by default
+
+ -- Sjoerd Simons <sjoerd@collabora.com>  Tue, 20 Apr 2021 11:18:09 +0200
 
 pipewire (0.3.25-1apertis1) apertis; urgency=medium
 
