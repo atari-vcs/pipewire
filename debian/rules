@@ -15,7 +15,7 @@ endif
 ifneq (,$(filter s390x hppa m68k powerpc ppc64 sparc64,$(DEB_HOST_ARCH)))
 BLUEZ5_CODEC_LDAC=disabled
 else
-BLUEZ5_CODEC_LDAC=enabled
+BLUEZ5_CODEC_LDAC=disabled
 endif
 
 override_dh_auto_configure:
