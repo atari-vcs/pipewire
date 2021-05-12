@@ -1,3 +1,12 @@
+pipewire (0.3.26-1) experimental; urgency=medium
+
+  * New upstream release
+  * Add libpipewire-0.3-common to hold the translation files
+  * Install pw-link in pipewire-bin
+  * Update libpipewire-0.3-0 symbols
+
+ -- Sjoerd Simons <sjoerd@debian.org>  Sun, 25 Apr 2021 20:54:29 +0200
+
 pipewire (0.3.25-1apertis2) apertis; urgency=medium
 
   * Enable pulseaudio compatibility later by default
@@ -82,13 +91,6 @@ pipewire (0.3.22-1) experimental; urgency=medium
     - Install new confiration file (bluez, v4l and client config)
 
  -- Sjoerd Simons <sjoerd@debian.org>  Sat, 20 Feb 2021 21:50:40 +0100
-
-pipewire (0.3.19-4apertis1) apertis; urgency=medium
-
-  * Sync updates from Debian Bullseye
-  * Continue to drop b-d on libav, sdl and x11
-
- -- Ritesh Raj Sarraf <ritesh.sarraf@collabora.com>  Thu, 18 Mar 2021 22:29:04 +0530
 
 pipewire (0.3.19-3) unstable; urgency=medium
 
@@ -348,19 +350,6 @@ pipewire (0.2.7-1) unstable; urgency=medium
   * Build-Depend on debhelper-compat 12 and drop debian/compat
 
  -- Jeremy Bicha <jbicha@debian.org>  Fri, 01 Nov 2019 21:50:48 -0400
-
-pipewire (0.2.5-1co2) apertis; urgency=medium
-
-  [ Ritesh Raj Sarraf ]
-  * debian/apertis/component: Set to target
-
- -- Emanuele Aina <emanuele.aina@collabora.com>  Mon, 22 Feb 2021 01:26:27 +0000
-
-pipewire (0.2.5-1co1) apertis; urgency=medium
-
-  * Drop b-d on libav, sdl and x11
-
- -- Sjoerd Simons <sjoerd.simons@collabora.co.uk>  Mon, 28 Jan 2019 21:25:55 +0100
 
 pipewire (0.2.5-1) unstable; urgency=medium
 
