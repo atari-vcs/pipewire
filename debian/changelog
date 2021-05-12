@@ -1,3 +1,14 @@
+pipewire (0.3.26-1apertis1) apertis; urgency=medium
+
+  * Sync updates from Debian Experimental
+  * Continue to disable build-depends
+    - libsdl2 (not needed)
+    - libjack-jackd2-dev (not needed)
+    - libopenaptx-dev (proprietary codec, unknown legal status)
+  * Continue to enable pipewire pulse units by default
+
+ -- Frédéric Danis <frederic.danis@collabora.com>  Wed, 12 May 2021 10:31:55 +0200
+
 pipewire (0.3.26-1) experimental; urgency=medium
 
   * New upstream release
