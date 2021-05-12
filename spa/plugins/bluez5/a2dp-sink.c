@@ -36,6 +36,7 @@
 #include <spa/utils/keys.h>
 #include <spa/utils/names.h>
 #include <spa/utils/result.h>
+#include <spa/utils/string.h>
 #include <spa/monitor/device.h>
 
 #include <spa/node/node.h>
@@ -509,7 +510,7 @@ static int add_data(struct impl *this, const void *data, uint32_t size)
 		if (processed <= 0)
 			return total > 0 ? total : processed;
 
-		data = SPA_MEMBER(data, processed, void);
+		data = SPA_PTROFF(data, processed, void);
 		size -= processed;
 		total += processed;
 	}
@@ -658,6 +659,9 @@ static void a2dp_on_timeout(struct spa_source *source)
 	prev_time = this->current_time;
 	now_time = this->current_time = this->next_time;
 
+	spa_log_debug(this->log, NAME" %p: timeout %"PRIu64" %"PRIu64"", this,
+			now_time, now_time - prev_time);
+
 	if (SPA_LIKELY(this->position)) {
 		duration = this->position->clock.duration;
 		rate = this->position->clock.rate.denom;
@@ -685,8 +689,6 @@ static void a2dp_on_timeout(struct spa_source *source)
 		this->clock->delay = (delay_nsec * this->clock->rate.denom) / SPA_NSEC_PER_SEC;
 	}
 
-	spa_log_trace(this->log, NAME" %p: timeout %"PRIu64" %"PRIu64"", this,
-			now_time, now_time - prev_time);
 
 	spa_log_trace(this->log, NAME " %p: %d", this, io->status);
 	io->status = SPA_STATUS_NEED_DATA;
@@ -1323,7 +1325,7 @@ static int impl_get_interface(struct spa_handle *handle, const char *type, void 
 
 	this = (struct impl *) handle;
 
-	if (strcmp(type, SPA_TYPE_INTERFACE_Node) == 0)
+	if (spa_streq(type, SPA_TYPE_INTERFACE_Node))
 		*interface = &this->node;
 	else
 		return -ENOENT;

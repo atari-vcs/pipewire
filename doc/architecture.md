@@ -1,9 +1,9 @@
-# Architecture
+# PipeWire Architecture
 
 There are 2 main components that make up the PipeWire library:
 
- 1) An implementation of a graph based media processing engine.
- 2) An asynchronous IPC mechanism to manipulate and introspect
+1. An implementation of a graph based media processing engine.
+2. An asynchronous IPC mechanism to manipulate and introspect
     a graph in another process.
 
 There is usually a daemon that implements the global graph and
@@ -208,7 +208,7 @@ Clients with MODIFY permissions on another object can set or remove
 metadata on that object.
 
 Clients that need permissions assigned to them can be started in
-blocked mode and resume when perrmissions are assigned to them by
+blocked mode and resume when permissions are assigned to them by
 a session manager or portal, for example.
 
 PipeWire uses memfd (`memfd_create(2)`) or DMA-BUF for sharing media

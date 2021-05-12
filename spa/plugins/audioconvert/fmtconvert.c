@@ -32,6 +32,7 @@
 #include <spa/support/cpu.h>
 #include <spa/utils/list.h>
 #include <spa/utils/names.h>
+#include <spa/utils/string.h>
 #include <spa/node/node.h>
 #include <spa/node/io.h>
 #include <spa/node/utils.h>
@@ -384,7 +385,7 @@ static int port_enum_formats(void *object,
 			    info.info.raw.format == SPA_AUDIO_FORMAT_F32P ||
 			    info.info.raw.format == SPA_AUDIO_FORMAT_F32) {
 				spa_pod_builder_add(builder,
-					SPA_FORMAT_AUDIO_format,   SPA_POD_CHOICE_ENUM_Id(14,
+					SPA_FORMAT_AUDIO_format,   SPA_POD_CHOICE_ENUM_Id(16,
 								info.info.raw.format,
 								SPA_AUDIO_FORMAT_F32P,
 								SPA_AUDIO_FORMAT_F32,
@@ -397,6 +398,8 @@ static int port_enum_formats(void *object,
 								SPA_AUDIO_FORMAT_S24_OE,
 								SPA_AUDIO_FORMAT_S16P,
 								SPA_AUDIO_FORMAT_S16,
+								SPA_AUDIO_FORMAT_S8P,
+								SPA_AUDIO_FORMAT_S8,
 								SPA_AUDIO_FORMAT_U8P,
 								SPA_AUDIO_FORMAT_U8),
 					0);
@@ -567,6 +570,8 @@ static int calc_width(struct spa_audio_info *info)
 	switch (info->info.raw.format) {
 	case SPA_AUDIO_FORMAT_U8P:
 	case SPA_AUDIO_FORMAT_U8:
+	case SPA_AUDIO_FORMAT_S8P:
+	case SPA_AUDIO_FORMAT_S8:
 		return 1;
 	case SPA_AUDIO_FORMAT_S16P:
 	case SPA_AUDIO_FORMAT_S16:
@@ -887,7 +892,7 @@ static int impl_node_process(void *object)
 		struct spa_data *sd = &inb->datas[src_remap];
 		offs = SPA_MIN(sd->chunk->offset, sd->maxsize);
 		size = SPA_MIN(size, SPA_MIN(sd->maxsize - offs, sd->chunk->size));
-		src_datas[i] = SPA_MEMBER(sd->data, offs, void);
+		src_datas[i] = SPA_PTROFF(sd->data, offs, void);
 	}
 	n_samples = size / inport->stride;
 
@@ -948,7 +953,7 @@ static int impl_get_interface(struct spa_handle *handle, const char *type, void 
 
 	this = (struct impl *) handle;
 
-	if (strcmp(type, SPA_TYPE_INTERFACE_Node) == 0)
+	if (spa_streq(type, SPA_TYPE_INTERFACE_Node))
 		*interface = &this->node;
 	else
 		return -ENOENT;
