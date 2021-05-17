@@ -52,6 +52,10 @@ ifneq ($(filter mips%,$(DEB_HOST_ARCH_CPU)),)
 test_timeout_multiplier = 10
 endif
 
+override_dh_install:
+	dh_install
+	dh_apparmor -ppipewire --profile-name=usr.bin.pipewire
+
 override_dh_auto_test:
 	dh_auto_test \
 		-- \
