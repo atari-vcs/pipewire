@@ -35,6 +35,7 @@
 #include <spa/utils/list.h>
 #include <spa/utils/keys.h>
 #include <spa/utils/names.h>
+#include <spa/utils/string.h>
 #include <spa/monitor/device.h>
 
 #include <spa/node/node.h>
@@ -529,14 +530,14 @@ static int do_start(struct impl *this)
 	/* Do accept if Gateway; otherwise do connect for Head Unit */
 	do_accept = this->transport->profile & SPA_BT_PROFILE_HEADSET_AUDIO_GATEWAY;
 
-	/* acquire the socked fd (false -> connect | true -> accept) */
+	/* acquire the socket fd (false -> connect | true -> accept) */
 	if ((res = spa_bt_transport_acquire(this->transport, do_accept)) < 0)
 		return res;
 
 	/* Init mSBC if needed */
 	if (this->transport->codec == HFP_AUDIO_CODEC_MSBC) {
 		sbc_init_msbc(&this->msbc, 0);
-		/* Libsbc expects audio samples by default in host endianity, mSBC requires little endian */
+		/* Libsbc expects audio samples by default in host endianness, mSBC requires little endian */
 		this->msbc.endian = SBC_LE;
 
 		/* write_mtu might not be correct at this point, so we'll throw
@@ -1139,7 +1140,7 @@ static int impl_get_interface(struct spa_handle *handle, const char *type, void 
 
 	this = (struct impl *) handle;
 
-	if (strcmp(type, SPA_TYPE_INTERFACE_Node) == 0)
+	if (spa_streq(type, SPA_TYPE_INTERFACE_Node))
 		*interface = &this->node;
 	else
 		return -ENOENT;
