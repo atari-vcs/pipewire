@@ -1,3 +1,14 @@
+pipewire (0.3.28-1+apertis1) apertis; urgency=medium
+
+  * Sync updates from Debian Experimental
+  * Continue to disable build-depends
+    - libsdl2 (not needed)
+    - libjack-jackd2-dev (not needed)
+    - libopenaptx-dev (proprietary codec, unknown legal status)
+  * Add apparmor rules
+
+ -- Frédéric Danis <frederic.danis@collabora.com>  Tue, 27 May 2021 16:12:50 +0200
+
 pipewire (0.3.28-1) experimental; urgency=medium
 
   [ Frédéric Danis ]
