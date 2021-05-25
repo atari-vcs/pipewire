@@ -36,8 +36,8 @@
 #include <spa/utils/hook.h>
 #include <spa/utils/result.h>
 #include <spa/utils/names.h>
-#include <spa/utils/result.h>
 #include <spa/utils/keys.h>
+#include <spa/utils/string.h>
 #include <spa/pod/builder.h>
 #include <spa/pod/parser.h>
 #include <spa/param/props.h>
@@ -92,6 +92,9 @@ struct impl {
 	struct sm_media_session *session;
 	struct spa_hook session_listener;
 
+	bool have_info;
+	bool seat_active;
+
 	struct pw_properties *conf;
 	struct pw_properties *props;
 
@@ -119,30 +122,30 @@ static void update_icon_name(struct pw_properties *p, bool is_sink)
 	const char *s, *d = NULL, *bus;
 
 	if ((s = pw_properties_get(p, PW_KEY_DEVICE_FORM_FACTOR))) {
-		if (strcmp(s, "microphone") == 0)
+		if (spa_streq(s, "microphone"))
 			d = "audio-input-microphone";
-		else if (strcmp(s, "webcam") == 0)
+		else if (spa_streq(s, "webcam"))
 			d = "camera-web";
-		else if (strcmp(s, "computer") == 0)
+		else if (spa_streq(s, "computer"))
 			d = "computer";
-		else if (strcmp(s, "handset") == 0)
+		else if (spa_streq(s, "handset"))
 			d = "phone";
-		else if (strcmp(s, "portable") == 0)
+		else if (spa_streq(s, "portable"))
 			d = "multimedia-player";
-		else if (strcmp(s, "tv") == 0)
+		else if (spa_streq(s, "tv"))
 			d = "video-display";
-		else if (strcmp(s, "headset") == 0)
+		else if (spa_streq(s, "headset"))
 			d = "audio-headset";
-		else if (strcmp(s, "headphone") == 0)
+		else if (spa_streq(s, "headphone"))
 			d = "audio-headphones";
-		else if (strcmp(s, "speaker") == 0)
+		else if (spa_streq(s, "speaker"))
 			d = "audio-speakers";
-		else if (strcmp(s, "hands-free") == 0)
+		else if (spa_streq(s, "hands-free"))
 			d = "audio-handsfree";
 	}
 	if (!d)
 		if ((s = pw_properties_get(p, PW_KEY_DEVICE_CLASS)))
-			if (strcmp(s, "modem") == 0)
+			if (spa_streq(s, "modem"))
 				d = "modem";
 
 	if (!d) {
@@ -193,7 +196,7 @@ static struct node *bluez5_create_node(struct device *device, uint32_t id,
 
 	pw_log_debug("new node %u", id);
 
-	if (strcmp(info->type, SPA_TYPE_INTERFACE_Node) != 0) {
+	if (!spa_streq(info->type, SPA_TYPE_INTERFACE_Node)) {
 		errno = EINVAL;
 		return NULL;
 	}
@@ -469,7 +472,7 @@ static struct device *bluez5_create_device(struct impl *impl, uint32_t id,
 
 	pw_log_debug("new device %u", id);
 
-	if (strcmp(info->type, SPA_TYPE_INTERFACE_Device) != 0) {
+	if (!spa_streq(info->type, SPA_TYPE_INTERFACE_Device)) {
 		errno = EINVAL;
 		return NULL;
 	}
@@ -561,7 +564,7 @@ static void bluez5_update_device(struct impl *impl, struct device *device,
 	update_device_props(device);
 
 	str = spa_dict_lookup(info->props, SPA_KEY_API_BLUEZ5_CONNECTION);
-	connected = str != NULL && strcmp(str, "connected") == 0;
+	connected = str != NULL && spa_streq(str, "connected");
 
 	/* Export device after bluez profiles get connected */
 	if (device->sdevice == NULL && connected) {
@@ -629,7 +632,7 @@ static int load_bluez_handle(struct impl *impl)
 	void *iface;
 	int res;
 
-	if (impl->handle != NULL)
+	if (impl->handle != NULL || !impl->seat_active || !impl->have_info)
 		return 0;
 
 	impl->handle = pw_context_load_spa_handle(context, SPA_NAME_API_BLUEZ5_ENUM_DBUS, &impl->props->dict);
@@ -656,13 +659,31 @@ fail:
 	return res;
 }
 
+static void session_info(void *data, const struct pw_core_info *info)
+{
+	struct impl *impl = data;
+
+	if (info && (info->change_mask & PW_CORE_CHANGE_MASK_PROPS)) {
+		const char *str;
+
+		if ((str = spa_dict_lookup(info->props, "default.clock.rate")) != NULL &&
+		    pw_properties_get(impl->props, "bluez5.default.rate") == NULL) {
+			pw_properties_set(impl->props, "bluez5.default.rate", str);
+		}
+
+		impl->have_info = true;
+		load_bluez_handle(impl);
+	}
+}
+
 static void session_destroy(void *data)
 {
 	struct impl *impl = data;
 
+	spa_hook_remove(&impl->session_listener);
+
 	unload_bluez_handle(impl);
 
-	spa_hook_remove(&impl->session_listener);
 	pw_properties_free(impl->props);
 	pw_properties_free(impl->conf);
 	free(impl);
@@ -671,7 +692,10 @@ static void session_destroy(void *data)
 static void seat_active(void *data, bool active)
 {
 	struct impl *impl = data;
-	if (active) {
+
+	impl->seat_active = active;
+
+	if (impl->seat_active) {
 		pw_log_info(NAME ": seat active, starting bluetooth");
 		load_bluez_handle(impl);
 	} else {
@@ -682,6 +706,7 @@ static void seat_active(void *data, bool active)
 
 static const struct sm_media_session_events session_events = {
 	SM_VERSION_MEDIA_SESSION_EVENTS,
+	.info = session_info,
 	.destroy = session_destroy,
 	.seat_active = seat_active,
 };
@@ -698,6 +723,7 @@ int sm_bluez5_monitor_start(struct sm_media_session *session)
 		goto out;
 	}
 	impl->session = session;
+	impl->seat_active = true;
 
 	spa_list_init(&impl->device_list);
 
@@ -718,16 +744,12 @@ int sm_bluez5_monitor_start(struct sm_media_session *session)
 
 	pw_properties_set(impl->props, "api.bluez5.connection-info", "true");
 
-	if ((res = load_bluez_handle(impl)) < 0)
-		goto out_free;
-
 	sm_media_session_add_listener(session, &impl->session_listener,
 			&session_events, impl);
 
 	return 0;
 
 out_free:
-	unload_bluez_handle(impl);
 	if (impl->conf)
 		pw_properties_free(impl->conf);
 	if (impl->props)

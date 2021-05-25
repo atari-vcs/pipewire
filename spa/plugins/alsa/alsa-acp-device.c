@@ -36,6 +36,7 @@
 #include <spa/node/node.h>
 #include <spa/utils/keys.h>
 #include <spa/utils/names.h>
+#include <spa/utils/string.h>
 #include <spa/support/loop.h>
 #include <spa/support/plugin.h>
 #include <spa/support/i18n.h>
@@ -405,11 +406,14 @@ static struct spa_pod *build_route(struct spa_pod_builder *b, uint32_t id,
 	if (dev != NULL) {
 		uint32_t channels = dev->format.channels;
 		float volumes[channels];
+		float soft_volumes[channels];
 		bool mute;
 
 		acp_device_get_mute(dev, &mute);
 		spa_zero(volumes);
+		spa_zero(soft_volumes);
 		acp_device_get_volume(dev, volumes, channels);
+		acp_device_get_soft_volume(dev, soft_volumes, channels);
 
 		spa_pod_builder_prop(b, SPA_PARAM_ROUTE_device, 0);
 		spa_pod_builder_int(b, dev->index);
@@ -436,6 +440,10 @@ static struct spa_pod *build_route(struct spa_pod_builder *b, uint32_t id,
 		spa_pod_builder_prop(b, SPA_PROP_channelMap, 0);
 		spa_pod_builder_array(b, sizeof(uint32_t), SPA_TYPE_Id,
 				channels, dev->format.map);
+
+		spa_pod_builder_prop(b, SPA_PROP_softVolumes, 0);
+		spa_pod_builder_array(b, sizeof(float), SPA_TYPE_Float,
+				channels, soft_volumes);
 
 		spa_pod_builder_pop(b, &f[1]);
 	}
@@ -791,16 +799,16 @@ static void on_volume_changed(void *data, struct acp_device *dev)
 	struct spa_pod_frame f[1];
 	uint32_t n_volume = dev->format.channels;
 	float volume[n_volume];
-	float mon_volume[n_volume];
+	float soft_volume[n_volume];
 
 	spa_log_info(this->log, "device %s volume changed", dev->name);
 	this->info.change_mask |= SPA_DEVICE_CHANGE_MASK_PARAMS;
 	this->params[IDX_Route].user++;
 
 	spa_zero(volume);
-	spa_zero(mon_volume);
-	acp_device_get_soft_volume(dev, volume, n_volume);
-	acp_device_get_volume(dev, mon_volume, n_volume);
+	spa_zero(soft_volume);
+	acp_device_get_volume(dev, volume, n_volume);
+	acp_device_get_soft_volume(dev, soft_volume, n_volume);
 
 	spa_pod_builder_init(&b, buffer, sizeof(buffer));
 	spa_pod_builder_push_object(&b, &f[0],
@@ -812,11 +820,11 @@ static void on_volume_changed(void *data, struct acp_device *dev)
 			SPA_TYPE_OBJECT_Props, SPA_EVENT_DEVICE_Props,
 			SPA_PROP_channelVolumes, SPA_POD_Array(sizeof(float),
 						SPA_TYPE_Float, n_volume, volume),
-			SPA_PROP_monitorVolumes, SPA_POD_Array(sizeof(float),
-						SPA_TYPE_Float, n_volume, mon_volume),
 			SPA_PROP_channelMap, SPA_POD_Array(sizeof(uint32_t),
 						SPA_TYPE_Id, dev->format.channels,
-						dev->format.map));
+						dev->format.map),
+			SPA_PROP_softVolumes, SPA_POD_Array(sizeof(float),
+						SPA_TYPE_Float, n_volume, soft_volume));
 	event = spa_pod_builder_pop(&b, &f[0]);
 
 	spa_device_emit_event(&this->hooks, event);
@@ -847,7 +855,7 @@ static void on_mute_changed(void *data, struct acp_device *dev)
 	spa_pod_builder_add_object(&b,
 			SPA_TYPE_OBJECT_Props, SPA_EVENT_DEVICE_Props,
 			SPA_PROP_mute, SPA_POD_Bool(mute),
-			SPA_PROP_monitorMute, SPA_POD_Bool(mute));
+			SPA_PROP_softMute, SPA_POD_Bool(mute));
 	event = spa_pod_builder_pop(&b, &f[0]);
 
 	spa_device_emit_event(&this->hooks, event);
@@ -873,7 +881,7 @@ static int impl_get_interface(struct spa_handle *handle, const char *type, void 
 
 	this = (struct impl *) handle;
 
-	if (strcmp(type, SPA_TYPE_INTERFACE_Device) == 0)
+	if (spa_streq(type, SPA_TYPE_INTERFACE_Device))
 		*interface = &this->device;
 	else
 		return -ENOENT;
@@ -951,9 +959,9 @@ impl_init(const struct spa_handle_factory *factory,
 		if ((str = spa_dict_lookup(info, SPA_KEY_API_ALSA_PATH)) != NULL)
 			snprintf(this->props.device, sizeof(this->props.device), "%s", str);
 		if ((str = spa_dict_lookup(info, "api.acp.auto-port")) != NULL)
-			this->props.auto_port = strcmp(str, "true") == 0 || atoi(str) != 0;
+			this->props.auto_port = spa_atob(str);
 		if ((str = spa_dict_lookup(info, "api.acp.auto-profile")) != NULL)
-			this->props.auto_profile = strcmp(str, "true") == 0 || atoi(str) != 0;
+			this->props.auto_profile = spa_atob(str);
 
 		items = alloca((info->n_items) * sizeof(*items));
 		spa_dict_for_each(it, info)

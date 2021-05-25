@@ -116,7 +116,7 @@ extern "C" {
  *
  * \subsection ssec_consume Consume data
  *
- * The process event is emitted for each new buffer that can can be
+ * The process event is emitted for each new buffer that can be
  * consumed.
  *
  * \ref pw_stream_dequeue_buffer() should be used to get the data and
@@ -193,7 +193,7 @@ struct pw_time {
 					  *  currently queued */
 };
 
-#include <pipewire/pipewire.h>
+#include <pipewire/port.h>
 
 /** Events for a stream. These events are always called from the mainloop
  * unless explicitly documented otherwise. */

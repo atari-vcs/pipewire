@@ -26,7 +26,11 @@
 
 #include <spa/pod/iter.h>
 #include <spa/pod/parser.h>
+#include <spa/utils/result.h>
+#include <spa/utils/string.h>
 #include <extensions/metadata.h>
+
+#define MAX_PARAMS 32
 
 #define manager_emit_sync(m) spa_hook_list_call(&m->hooks, struct pw_manager_events, sync, 0)
 #define manager_emit_added(m,o) spa_hook_list_call(&m->hooks, struct pw_manager_events, added, 0, o)
@@ -72,6 +76,8 @@ struct object {
 	struct spa_hook proxy_listener;
 	struct spa_hook object_listener;
 
+	int param_seq[MAX_PARAMS];
+
 	struct spa_list data_list;
 };
 
@@ -97,7 +103,8 @@ static uint32_t clear_params(struct spa_list *param_list, uint32_t id)
 	return count;
 }
 
-static struct pw_manager_param *add_param(struct spa_list *params, uint32_t id, const struct spa_pod *param)
+static struct pw_manager_param *add_param(struct spa_list *params,
+		int seq, int *param_seq, uint32_t id, const struct spa_pod *param)
 {
 	struct pw_manager_param *p;
 
@@ -109,13 +116,26 @@ static struct pw_manager_param *add_param(struct spa_list *params, uint32_t id, 
 		id = SPA_POD_OBJECT_ID(param);
 	}
 
+	if (id >= MAX_PARAMS) {
+		pw_log_error("too big param id %d", id);
+		errno = EINVAL;
+		return NULL;
+	}
+
+	if (seq != param_seq[id]) {
+		pw_log_debug("ignoring param %d, seq:%d != current_seq:%d",
+				id, seq, param_seq[id]);
+		errno = EBUSY;
+		return NULL;
+	}
+
 	p = malloc(sizeof(*p) + (param != NULL ? SPA_POD_SIZE(param) : 0));
 	if (p == NULL)
 		return NULL;
 
 	p->id = id;
 	if (param != NULL) {
-		p->param = SPA_MEMBER(p, sizeof(*p), struct spa_pod);
+		p->param = SPA_PTROFF(p, sizeof(*p), struct spa_pod);
 		memcpy(p->param, param, SPA_POD_SIZE(param));
 	} else {
 		clear_params(params, id);
@@ -287,10 +307,16 @@ static void device_event_info(void *object, const struct pw_device_info *info)
 	if (info->change_mask & PW_DEVICE_CHANGE_MASK_PARAMS) {
 		for (i = 0; i < info->n_params; i++) {
 			uint32_t id = info->params[i].id;
+			int res;
 
 			if (info->params[i].user == 0)
 				continue;
 			info->params[i].user = 0;
+
+			if (id >= MAX_PARAMS) {
+				pw_log_error("too big param id %d", id);
+				continue;
+			}
 
 			switch (id) {
 			case SPA_PARAM_EnumProfile:
@@ -301,12 +327,14 @@ static void device_event_info(void *object, const struct pw_device_info *info)
 			case SPA_PARAM_Route:
 				break;
 			}
-			add_param(&o->pending_list, id, NULL);
+			add_param(&o->pending_list, o->param_seq[id], o->param_seq, id, NULL);
 			if (!(info->params[i].flags & SPA_PARAM_INFO_READ))
 				continue;
 
-			pw_device_enum_params((struct pw_device*)o->this.proxy,
-					0, id, 0, -1, NULL);
+			res = pw_device_enum_params((struct pw_device*)o->this.proxy,
+					++o->param_seq[id], id, 0, -1, NULL);
+			if (SPA_RESULT_IS_ASYNC(res))
+				o->param_seq[id] = res;
 		}
 	}
 	if (changed) {
@@ -322,7 +350,7 @@ static struct object *find_device(struct manager *m, uint32_t card_id, uint32_t 
 		struct pw_node_info *info;
 		const char *str;
 
-		if (strcmp(o->this.type, PW_TYPE_INTERFACE_Node) != 0)
+		if (!spa_streq(o->this.type, PW_TYPE_INTERFACE_Node))
 			continue;
 
 		if ((info = o->this.info) != NULL &&
@@ -343,7 +371,9 @@ static void device_event_param(void *object, int seq,
 	struct manager *m = o->manager;
 	struct pw_manager_param *p;
 
-	p = add_param(&o->pending_list, id, param);
+	p = add_param(&o->pending_list, seq, o->param_seq, id, param);
+	if (p == NULL)
+		return;
 
 	if (id == SPA_PARAM_Route && !has_param(&o->this.param_list, p)) {
 		uint32_t id, device;
@@ -400,18 +430,26 @@ static void node_event_info(void *object, const struct pw_node_info *info)
 	if (info->change_mask & PW_NODE_CHANGE_MASK_PARAMS) {
 		for (i = 0; i < info->n_params; i++) {
 			uint32_t id = info->params[i].id;
+			int res;
 
 			if (info->params[i].user == 0)
 				continue;
 			info->params[i].user = 0;
 
+			if (id >= MAX_PARAMS) {
+				pw_log_error("too big param id %d", id);
+				continue;
+			}
+
 			changed++;
-			add_param(&o->pending_list, id, NULL);
+			add_param(&o->pending_list, o->param_seq[id], o->param_seq, id, NULL);
 			if (!(info->params[i].flags & SPA_PARAM_INFO_READ))
 				continue;
 
-			pw_node_enum_params((struct pw_node*)o->this.proxy,
-					0, id, 0, -1, NULL);
+			res = pw_node_enum_params((struct pw_node*)o->this.proxy,
+					++o->param_seq[id], id, 0, -1, NULL);
+			if (SPA_RESULT_IS_ASYNC(res))
+				o->param_seq[id] = res;
 		}
 	}
 	if (changed) {
@@ -425,7 +463,7 @@ static void node_event_param(void *object, int seq,
 		const struct spa_pod *param)
 {
 	struct object *o = object;
-	add_param(&o->pending_list, id, param);
+	add_param(&o->pending_list, seq, o->param_seq, id, param);
 }
 
 static const struct pw_node_events node_events = {
@@ -503,7 +541,7 @@ static const struct object_info *find_info(const char *type, uint32_t version)
 {
 	size_t i;
 	for (i = 0; i < SPA_N_ELEMENTS(objects); i++) {
-		if (strcmp(objects[i]->type, type) == 0 &&
+		if (spa_streq(objects[i]->type, type) &&
 		    objects[i]->version <= version)
 			return objects[i];
 	}
@@ -773,7 +811,7 @@ static struct object_data *object_find_data(struct object *o, const char *id)
 {
 	struct object_data *d;
 	spa_list_for_each(d, &o->data_list, link) {
-		if (strcmp(d->id, id) == 0)
+		if (spa_streq(d->id, id))
 			return d;
 	}
 	return NULL;
@@ -799,7 +837,7 @@ void *pw_manager_object_add_data(struct pw_manager_object *obj, const char *id, 
 	spa_list_append(&o->data_list, &d->link);
 
 done:
-	return SPA_MEMBER(d, sizeof(struct object_data), void);
+	return SPA_PTROFF(d, sizeof(struct object_data), void);
 }
 
 int pw_manager_sync(struct pw_manager *manager)
@@ -810,57 +848,57 @@ int pw_manager_sync(struct pw_manager *manager)
 
 bool pw_manager_object_is_client(struct pw_manager_object *o)
 {
-	return strcmp(o->type, PW_TYPE_INTERFACE_Client) == 0;
+	return spa_streq(o->type, PW_TYPE_INTERFACE_Client);
 }
 
 bool pw_manager_object_is_module(struct pw_manager_object *o)
 {
-	return strcmp(o->type, PW_TYPE_INTERFACE_Module) == 0;
+	return spa_streq(o->type, PW_TYPE_INTERFACE_Module);
 }
 
 bool pw_manager_object_is_card(struct pw_manager_object *o)
 {
 	const char *str;
-	return strcmp(o->type, PW_TYPE_INTERFACE_Device) == 0 &&
+	return spa_streq(o->type, PW_TYPE_INTERFACE_Device) &&
 		o->props != NULL &&
 		(str = pw_properties_get(o->props, PW_KEY_MEDIA_CLASS)) != NULL &&
-		strcmp(str, "Audio/Device") == 0;
+		spa_streq(str, "Audio/Device");
 }
 
 bool pw_manager_object_is_sink(struct pw_manager_object *o)
 {
 	const char *str;
-	return strcmp(o->type, PW_TYPE_INTERFACE_Node) == 0 &&
+	return spa_streq(o->type, PW_TYPE_INTERFACE_Node) &&
 		o->props != NULL &&
 		(str = pw_properties_get(o->props, PW_KEY_MEDIA_CLASS)) != NULL &&
-		(strcmp(str, "Audio/Sink") == 0 || strcmp(str, "Audio/Duplex") == 0);
+		(spa_streq(str, "Audio/Sink") || spa_streq(str, "Audio/Duplex"));
 }
 
 bool pw_manager_object_is_source(struct pw_manager_object *o)
 {
 	const char *str;
-	return strcmp(o->type, PW_TYPE_INTERFACE_Node) == 0 &&
+	return spa_streq(o->type, PW_TYPE_INTERFACE_Node) &&
 		o->props != NULL &&
 		(str = pw_properties_get(o->props, PW_KEY_MEDIA_CLASS)) != NULL &&
-		(strcmp(str, "Audio/Source") == 0 ||
-		 strcmp(str, "Audio/Duplex") == 0 ||
-		 strcmp(str, "Audio/Source/Virtual") == 0);
+		(spa_streq(str, "Audio/Source") ||
+		 spa_streq(str, "Audio/Duplex") ||
+		 spa_streq(str, "Audio/Source/Virtual"));
 }
 
 bool pw_manager_object_is_monitor(struct pw_manager_object *o)
 {
 	const char *str;
-	return strcmp(o->type, PW_TYPE_INTERFACE_Node) == 0 &&
+	return spa_streq(o->type, PW_TYPE_INTERFACE_Node) &&
 		o->props != NULL &&
 		(str = pw_properties_get(o->props, PW_KEY_MEDIA_CLASS)) != NULL &&
-		(strcmp(str, "Audio/Sink") == 0);
+		(spa_streq(str, "Audio/Sink"));
 }
 
 bool pw_manager_object_is_virtual(struct pw_manager_object *o)
 {
 	const char *str;
 	struct pw_node_info *info;
-	return strcmp(o->type, PW_TYPE_INTERFACE_Node) == 0 &&
+	return spa_streq(o->type, PW_TYPE_INTERFACE_Node) &&
 		(info = o->info) != NULL && info->props != NULL &&
 		(str = spa_dict_lookup(info->props, PW_KEY_NODE_VIRTUAL)) != NULL &&
 		pw_properties_parse_bool(str);
@@ -874,19 +912,19 @@ bool pw_manager_object_is_source_or_monitor(struct pw_manager_object *o)
 bool pw_manager_object_is_sink_input(struct pw_manager_object *o)
 {
 	const char *str;
-	return strcmp(o->type, PW_TYPE_INTERFACE_Node) == 0 &&
+	return spa_streq(o->type, PW_TYPE_INTERFACE_Node) &&
 		o->props != NULL &&
 		(str = pw_properties_get(o->props, PW_KEY_MEDIA_CLASS)) != NULL &&
-		strcmp(str, "Stream/Output/Audio") == 0;
+		spa_streq(str, "Stream/Output/Audio");
 }
 
 bool pw_manager_object_is_source_output(struct pw_manager_object *o)
 {
 	const char *str;
-	return strcmp(o->type, PW_TYPE_INTERFACE_Node) == 0 &&
+	return spa_streq(o->type, PW_TYPE_INTERFACE_Node) &&
 		o->props != NULL &&
 		(str = pw_properties_get(o->props, PW_KEY_MEDIA_CLASS)) != NULL &&
-		strcmp(str, "Stream/Input/Audio") == 0;
+		spa_streq(str, "Stream/Input/Audio");
 }
 
 bool pw_manager_object_is_recordable(struct pw_manager_object *o)
@@ -896,5 +934,5 @@ bool pw_manager_object_is_recordable(struct pw_manager_object *o)
 
 bool pw_manager_object_is_link(struct pw_manager_object *o)
 {
-	return strcmp(o->type, PW_TYPE_INTERFACE_Link) == 0;
+	return spa_streq(o->type, PW_TYPE_INTERFACE_Link);
 }

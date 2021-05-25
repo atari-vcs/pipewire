@@ -118,11 +118,16 @@ struct stream {
 		struct spa_io_position *position;
 	} rt;
 
-	uint32_t change_mask_all;
+	uint32_t port_change_mask_all;
 	struct spa_port_info port_info;
 	struct pw_properties *port_props;
+	struct spa_param_info port_params[5];
+
 	struct spa_list param_list;
-	struct spa_param_info params[5];
+
+	uint32_t change_mask_all;
+	struct spa_node_info info;
+	struct spa_param_info params[1];
 
 	uint32_t media_type;
 	uint32_t media_subtype;
@@ -151,6 +156,16 @@ struct stream {
 static int get_param_index(uint32_t id)
 {
 	switch (id) {
+	case SPA_PARAM_Props:
+		return 0;
+	default:
+		return -1;
+	}
+}
+
+static int get_port_param_index(uint32_t id)
+{
+	switch (id) {
 	case SPA_PARAM_EnumFormat:
 		return 0;
 	case SPA_PARAM_Meta:
@@ -163,6 +178,32 @@ static int get_param_index(uint32_t id)
 		return 4;
 	default:
 		return -1;
+	}
+}
+
+static void fix_datatype(const struct spa_pod *param)
+{
+	const struct spa_pod_prop *pod_param;
+	const struct spa_pod *vals;
+	uint32_t dataType, n_vals, choice;
+
+	pod_param = spa_pod_find_prop(param, NULL, SPA_PARAM_BUFFERS_dataType);
+	if (pod_param == NULL)
+		return;
+
+	vals = spa_pod_get_values(&pod_param->value, &n_vals, &choice);
+	if (n_vals == 0)
+		return;
+
+	if (spa_pod_get_int(&vals[0], (int32_t*)&dataType) < 0)
+		return;
+
+	pw_log_debug(NAME" dataType: %u", dataType);
+	if (dataType & (1u << SPA_DATA_MemPtr)) {
+		SPA_POD_VALUE(struct spa_pod_int, &vals[0]) =
+			dataType | mappable_dataTypes;
+		pw_log_debug(NAME" Change dataType: %u -> %u", dataType,
+				SPA_POD_VALUE(struct spa_pod_int, &vals[0]));
 	}
 }
 
@@ -183,41 +224,27 @@ static struct param *add_param(struct stream *impl,
 	if (p == NULL)
 		return NULL;
 
-	if (id == SPA_PARAM_Buffers && SPA_FLAG_IS_SET(impl->flags, PW_STREAM_FLAG_MAP_BUFFERS) &&
-		impl->direction == SPA_DIRECTION_INPUT)
-	{
-		const struct spa_pod_prop *pod_param;
-		uint32_t dataType = 0;
-
-		pod_param = spa_pod_find_prop(param, NULL, SPA_PARAM_BUFFERS_dataType);
-		if (pod_param != NULL)
-		{
-			spa_pod_get_int(&pod_param->value, (int32_t*)&dataType);
-			pw_log_debug(NAME" dataType: %d", dataType);
-			if ((dataType & (1<<SPA_DATA_MemPtr)) > 0)
-			{
-				pw_log_debug(NAME" Change dataType");
-				struct spa_pod_int *int_pod = (struct spa_pod_int*)&pod_param->value;
-				dataType = dataType | mappable_dataTypes;
-				pw_log_debug(NAME" dataType: %d", dataType);
-				int_pod->value = dataType;
-			}
-		}
-	}
+	if (id == SPA_PARAM_Buffers &&
+	    SPA_FLAG_IS_SET(impl->flags, PW_STREAM_FLAG_MAP_BUFFERS) &&
+	    impl->direction == SPA_DIRECTION_INPUT)
+		fix_datatype(param);
 
 	p->id = id;
 	p->flags = flags;
-	p->param = SPA_MEMBER(p, sizeof(struct param), struct spa_pod);
+	p->param = SPA_PTROFF(p, sizeof(struct param), struct spa_pod);
 	memcpy(p->param, param, SPA_POD_SIZE(param));
 	SPA_POD_OBJECT_ID(p->param) = id;
 
 	spa_list_append(&impl->param_list, &p->link);
 
-	idx = get_param_index(id);
-	if (idx != -1) {
-		impl->port_info.change_mask |= SPA_PORT_CHANGE_MASK_PARAMS;
+	if ((idx = get_param_index(id)) != -1) {
+		impl->info.change_mask |= SPA_NODE_CHANGE_MASK_PARAMS;
 		impl->params[idx].flags ^= SPA_PARAM_INFO_SERIAL;
 		impl->params[idx].flags |= SPA_PARAM_INFO_READ;
+	} else if ((idx = get_port_param_index(id)) != -1) {
+		impl->port_info.change_mask |= SPA_PORT_CHANGE_MASK_PARAMS;
+		impl->port_params[idx].flags ^= SPA_PARAM_INFO_SERIAL;
+		impl->port_params[idx].flags |= SPA_PARAM_INFO_READ;
 	}
 
 	return p;
@@ -407,131 +434,7 @@ static int impl_set_io(void *object, uint32_t id, void *data, size_t size)
 	return 0;
 }
 
-static int impl_send_command(void *object, const struct spa_command *command)
-{
-	struct stream *impl = object;
-	struct pw_stream *stream = &impl->this;
-
-	switch (SPA_NODE_COMMAND_ID(command)) {
-	case SPA_NODE_COMMAND_Suspend:
-	case SPA_NODE_COMMAND_Flush:
-	case SPA_NODE_COMMAND_Pause:
-		pw_loop_invoke(impl->context->main_loop,
-			NULL, 0, NULL, 0, false, impl);
-		if (stream->state == PW_STREAM_STATE_STREAMING) {
-
-			pw_log_debug(NAME" %p: pause", stream);
-			stream_set_state(stream, PW_STREAM_STATE_PAUSED, NULL);
-		}
-		break;
-	case SPA_NODE_COMMAND_Start:
-		if (stream->state == PW_STREAM_STATE_PAUSED) {
-			pw_log_debug(NAME" %p: start %d", stream, impl->direction);
-
-			if (impl->direction == SPA_DIRECTION_INPUT)
-				impl->io->status = SPA_STATUS_NEED_DATA;
-			else
-				call_process(impl);
-
-			stream_set_state(stream, PW_STREAM_STATE_STREAMING, NULL);
-		}
-		break;
-	case SPA_NODE_COMMAND_ParamBegin:
-	case SPA_NODE_COMMAND_ParamEnd:
-		break;
-	default:
-		pw_log_warn(NAME" %p: unhandled node command %d", stream,
-				SPA_NODE_COMMAND_ID(command));
-		break;
-	}
-	return 0;
-}
-
-static void emit_node_info(struct stream *d)
-{
-	struct spa_node_info info;
-
-	info = SPA_NODE_INFO_INIT();
-	if (d->direction == SPA_DIRECTION_INPUT) {
-		info.max_input_ports = 1;
-		info.max_output_ports = 0;
-	} else {
-		info.max_input_ports = 0;
-		info.max_output_ports = 1;
-	}
-	info.change_mask |= SPA_NODE_CHANGE_MASK_FLAGS;
-	/* we're always RT safe, if the stream was marked RT_PROCESS,
-	 * the callback must be RT safe */
-	info.flags = SPA_NODE_FLAG_RT;
-	/* if the callback was not marked RT_PROCESS, we will offload
-	 * the process callback in the main thread and we are ASYNC */
-	if (!d->process_rt)
-		info.flags |= SPA_NODE_FLAG_ASYNC;
-	spa_node_emit_info(&d->hooks, &info);
-}
-
-static void emit_port_info(struct stream *d, bool full)
-{
-	if (full)
-		d->port_info.change_mask = d->change_mask_all;
-	if (d->port_info.change_mask != 0)
-		spa_node_emit_port_info(&d->hooks, d->direction, 0, &d->port_info);
-	d->port_info.change_mask = 0;
-}
-
-static int impl_add_listener(void *object,
-		struct spa_hook *listener,
-		const struct spa_node_events *events,
-		void *data)
-{
-	struct stream *d = object;
-	struct spa_hook_list save;
-
-	spa_hook_list_isolate(&d->hooks, &save, listener, events, data);
-
-	emit_node_info(d);
-	emit_port_info(d, true);
-
-	spa_hook_list_join(&d->hooks, &save);
-
-	return 0;
-}
-
-static int impl_set_callbacks(void *object,
-			      const struct spa_node_callbacks *callbacks, void *data)
-{
-	struct stream *d = object;
-
-	d->callbacks = SPA_CALLBACKS_INIT(callbacks, data);
-
-	return 0;
-}
-
-static int impl_port_set_io(void *object, enum spa_direction direction, uint32_t port_id,
-			    uint32_t id, void *data, size_t size)
-{
-	struct stream *impl = object;
-	struct pw_stream *stream = &impl->this;
-
-	pw_log_debug(NAME" %p: set io id %d (%s) %p %zd", impl, id,
-			spa_debug_type_find_name(spa_type_io, id), data, size);
-
-	switch (id) {
-	case SPA_IO_Buffers:
-		if (data && size >= sizeof(struct spa_io_buffers))
-			impl->io = data;
-		else
-			impl->io = NULL;
-		break;
-	}
-	pw_stream_emit_io_changed(stream, id, data, size);
-
-	return 0;
-}
-
-static int impl_port_enum_params(void *object, int seq,
-				 enum spa_direction direction, uint32_t port_id,
-				 uint32_t id, uint32_t start, uint32_t num,
+static int enum_params(void *object, bool is_port, int seq, uint32_t id, uint32_t start, uint32_t num,
 				 const struct spa_pod *filter)
 {
 	struct stream *d = object;
@@ -576,6 +479,140 @@ static int impl_port_enum_params(void *object, int seq,
 	return found ? 0 : -ENOENT;
 }
 
+static int impl_enum_params(void *object, int seq, uint32_t id, uint32_t start, uint32_t num,
+				 const struct spa_pod *filter)
+{
+	return enum_params(object, false, seq, id, start, num, filter);
+}
+
+static int impl_set_param(void *object, uint32_t id, uint32_t flags, const struct spa_pod *param)
+{
+	struct stream *impl = object;
+	struct pw_stream *stream = &impl->this;
+
+	if (id != SPA_PARAM_Props)
+		return -ENOTSUP;
+
+	pw_stream_emit_param_changed(stream, id, param);
+	return 0;
+}
+
+static int impl_send_command(void *object, const struct spa_command *command)
+{
+	struct stream *impl = object;
+	struct pw_stream *stream = &impl->this;
+
+	switch (SPA_NODE_COMMAND_ID(command)) {
+	case SPA_NODE_COMMAND_Suspend:
+	case SPA_NODE_COMMAND_Flush:
+	case SPA_NODE_COMMAND_Pause:
+		pw_loop_invoke(impl->context->main_loop,
+			NULL, 0, NULL, 0, false, impl);
+		if (stream->state == PW_STREAM_STATE_STREAMING) {
+
+			pw_log_debug(NAME" %p: pause", stream);
+			stream_set_state(stream, PW_STREAM_STATE_PAUSED, NULL);
+		}
+		break;
+	case SPA_NODE_COMMAND_Start:
+		if (stream->state == PW_STREAM_STATE_PAUSED) {
+			pw_log_debug(NAME" %p: start %d", stream, impl->direction);
+
+			if (impl->direction == SPA_DIRECTION_INPUT)
+				impl->io->status = SPA_STATUS_NEED_DATA;
+			else
+				call_process(impl);
+
+			stream_set_state(stream, PW_STREAM_STATE_STREAMING, NULL);
+		}
+		break;
+	case SPA_NODE_COMMAND_ParamBegin:
+	case SPA_NODE_COMMAND_ParamEnd:
+		break;
+	default:
+		pw_log_warn(NAME" %p: unhandled node command %d", stream,
+				SPA_NODE_COMMAND_ID(command));
+		break;
+	}
+	return 0;
+}
+
+static void emit_node_info(struct stream *d, bool full)
+{
+	if (full)
+		d->info.change_mask = d->change_mask_all;
+	if (d->info.change_mask != 0)
+		spa_node_emit_info(&d->hooks, &d->info);
+	d->info.change_mask = 0;
+}
+
+static void emit_port_info(struct stream *d, bool full)
+{
+	if (full)
+		d->port_info.change_mask = d->port_change_mask_all;
+	if (d->port_info.change_mask != 0)
+		spa_node_emit_port_info(&d->hooks, d->direction, 0, &d->port_info);
+	d->port_info.change_mask = 0;
+}
+
+static int impl_add_listener(void *object,
+		struct spa_hook *listener,
+		const struct spa_node_events *events,
+		void *data)
+{
+	struct stream *d = object;
+	struct spa_hook_list save;
+
+	spa_hook_list_isolate(&d->hooks, &save, listener, events, data);
+
+	emit_node_info(d, true);
+	emit_port_info(d, true);
+
+	spa_hook_list_join(&d->hooks, &save);
+
+	return 0;
+}
+
+static int impl_set_callbacks(void *object,
+			      const struct spa_node_callbacks *callbacks, void *data)
+{
+	struct stream *d = object;
+
+	d->callbacks = SPA_CALLBACKS_INIT(callbacks, data);
+
+	return 0;
+}
+
+static int impl_port_set_io(void *object, enum spa_direction direction, uint32_t port_id,
+			    uint32_t id, void *data, size_t size)
+{
+	struct stream *impl = object;
+	struct pw_stream *stream = &impl->this;
+
+	pw_log_debug(NAME" %p: set io id %d (%s) %p %zd", impl, id,
+			spa_debug_type_find_name(spa_type_io, id), data, size);
+
+	switch (id) {
+	case SPA_IO_Buffers:
+		if (data && size >= sizeof(struct spa_io_buffers))
+			impl->io = data;
+		else
+			impl->io = NULL;
+		break;
+	}
+	pw_stream_emit_io_changed(stream, id, data, size);
+
+	return 0;
+}
+
+static int impl_port_enum_params(void *object, int seq,
+				 enum spa_direction direction, uint32_t port_id,
+				 uint32_t id, uint32_t start, uint32_t num,
+				 const struct spa_pod *filter)
+{
+	return enum_params(object, true, seq, id, start, num, filter);
+}
+
 static int map_data(struct stream *impl, struct spa_data *data, int prot)
 {
 	void *ptr;
@@ -589,7 +626,7 @@ static int map_data(struct stream *impl, struct spa_data *data, int prot)
 		return -errno;
 	}
 
-	data->data = SPA_MEMBER(ptr, range.start, void);
+	data->data = SPA_PTROFF(ptr, range.start, void);
 	pw_log_debug(NAME" %p: fd %"PRIi64" mapped %d %d %p", impl, data->fd,
 			range.offset, range.size, data->data);
 
@@ -613,7 +650,7 @@ static int unmap_data(struct stream *impl, struct spa_data *data)
 
 	pw_map_range_init(&range, data->mapoffset, data->maxsize, impl->context->sc_pagesize);
 
-	if (munmap(SPA_MEMBER(data->data, -range.start, void), range.size) < 0)
+	if (munmap(SPA_PTROFF(data->data, -range.start, void), range.size) < 0)
 		pw_log_warn(NAME" %p: failed to unmap: %m", impl);
 
 	pw_log_debug(NAME" %p: fd %"PRIi64" unmapped", impl, data->fd);
@@ -880,6 +917,8 @@ static const struct spa_node_methods impl_node = {
 	SPA_VERSION_NODE_METHODS,
 	.add_listener = impl_add_listener,
 	.set_callbacks = impl_set_callbacks,
+	.enum_params = impl_enum_params,
+	.set_param = impl_set_param,
 	.set_io = impl_set_io,
 	.send_command = impl_send_command,
 	.port_set_io = impl_port_set_io,
@@ -960,7 +999,7 @@ static int node_event_param(void *object, int seq,
 			return 0;
 
 		c = calloc(1, sizeof(*c) + SPA_POD_SIZE(param));
-		c->info = SPA_MEMBER(c, sizeof(*c), struct spa_pod);
+		c->info = SPA_PTROFF(c, sizeof(*c), struct spa_pod);
 		memcpy(c->info, param, SPA_POD_SIZE(param));
 		c->control.n_values = 0;
 		c->control.max_values = 0;
@@ -1514,28 +1553,56 @@ pw_stream_connect(struct pw_stream *stream,
 	else
 		impl->node_methods.process = impl_node_process_output;
 
+	impl->process_rt = SPA_FLAG_IS_SET(flags, PW_STREAM_FLAG_RT_PROCESS);
+
 	impl->impl_node.iface = SPA_INTERFACE_INIT(
 			SPA_TYPE_INTERFACE_Node,
 			SPA_VERSION_NODE,
 			&impl->node_methods, impl);
 
 	impl->change_mask_all =
+		SPA_NODE_CHANGE_MASK_FLAGS |
+		SPA_NODE_CHANGE_MASK_PROPS |
+		SPA_NODE_CHANGE_MASK_PARAMS;
+
+	impl->info = SPA_NODE_INFO_INIT();
+	if (impl->direction == SPA_DIRECTION_INPUT) {
+		impl->info.max_input_ports = 1;
+		impl->info.max_output_ports = 0;
+	} else {
+		impl->info.max_input_ports = 0;
+		impl->info.max_output_ports = 1;
+	}
+	/* we're always RT safe, if the stream was marked RT_PROCESS,
+	 * the callback must be RT safe */
+	impl->info.flags = SPA_NODE_FLAG_RT;
+	/* if the callback was not marked RT_PROCESS, we will offload
+	 * the process callback in the main thread and we are ASYNC */
+	if (!impl->process_rt)
+		impl->info.flags |= SPA_NODE_FLAG_ASYNC;
+	impl->info.props = &stream->properties->dict;
+	impl->params[0] = SPA_PARAM_INFO(SPA_PARAM_Props, SPA_PARAM_INFO_WRITE);
+	impl->info.params = impl->params;
+	impl->info.n_params = 1;
+	impl->info.change_mask = impl->change_mask_all;
+
+	impl->port_change_mask_all =
 		SPA_PORT_CHANGE_MASK_FLAGS |
 		SPA_PORT_CHANGE_MASK_PROPS |
 		SPA_PORT_CHANGE_MASK_PARAMS;
 
 	impl->port_info = SPA_PORT_INFO_INIT();
-	impl->port_info.change_mask = impl->change_mask_all;
+	impl->port_info.change_mask = impl->port_change_mask_all;
 	impl->port_info.flags = 0;
 	if (SPA_FLAG_IS_SET(flags, PW_STREAM_FLAG_ALLOC_BUFFERS))
 		impl->port_info.flags |= SPA_PORT_FLAG_CAN_ALLOC_BUFFERS;
-	impl->params[0] = SPA_PARAM_INFO(SPA_PARAM_EnumFormat, 0);
-	impl->params[1] = SPA_PARAM_INFO(SPA_PARAM_Meta, 0);
-	impl->params[2] = SPA_PARAM_INFO(SPA_PARAM_IO, 0);
-	impl->params[3] = SPA_PARAM_INFO(SPA_PARAM_Format, SPA_PARAM_INFO_WRITE);
-	impl->params[4] = SPA_PARAM_INFO(SPA_PARAM_Buffers, 0);
+	impl->port_params[0] = SPA_PARAM_INFO(SPA_PARAM_EnumFormat, 0);
+	impl->port_params[1] = SPA_PARAM_INFO(SPA_PARAM_Meta, 0);
+	impl->port_params[2] = SPA_PARAM_INFO(SPA_PARAM_IO, 0);
+	impl->port_params[3] = SPA_PARAM_INFO(SPA_PARAM_Format, SPA_PARAM_INFO_WRITE);
+	impl->port_params[4] = SPA_PARAM_INFO(SPA_PARAM_Buffers, 0);
 	impl->port_info.props = &impl->port_props->dict;
-	impl->port_info.params = impl->params;
+	impl->port_info.params = impl->port_params;
 	impl->port_info.n_params = 5;
 
 	clear_params(impl, SPA_ID_INVALID);
@@ -1565,8 +1632,6 @@ pw_stream_connect(struct pw_stream *stream,
 		pw_properties_set(stream->properties, PW_KEY_NODE_EXCLUSIVE, "true");
 	if (flags & PW_STREAM_FLAG_DONT_RECONNECT)
 		pw_properties_set(stream->properties, PW_KEY_NODE_DONT_RECONNECT, "true");
-
-	impl->process_rt = SPA_FLAG_IS_SET(flags, PW_STREAM_FLAG_RT_PROCESS);
 
 	if ((str = pw_properties_get(stream->properties, "mem.warn-mlock")) != NULL)
 		impl->warn_mlock = pw_properties_parse_bool(str);
@@ -1753,6 +1818,7 @@ int pw_stream_update_params(struct pw_stream *stream,
 	if ((res = update_params(impl, SPA_ID_INVALID, params, n_params)) < 0)
 		return res;
 
+	emit_node_info(impl, false);
 	emit_port_info(impl, false);
 
 	return res;
@@ -1866,7 +1932,7 @@ do_process(struct spa_loop *loop,
                  bool async, uint32_t seq, const void *data, size_t size, void *user_data)
 {
 	struct stream *impl = user_data;
-	int res = impl_node_process_output(impl);
+	int res = impl->node_methods.process(impl);
 	return spa_node_call_ready(&impl->callbacks, res);
 }
 
@@ -1921,7 +1987,10 @@ int pw_stream_queue_buffer(struct pw_stream *stream, struct pw_buffer *buffer)
 	if ((res = push_queue(impl, &impl->queued, b)) < 0)
 		return res;
 
-	return call_trigger(impl);
+	if (impl->direction == SPA_DIRECTION_OUTPUT)
+		res = call_trigger(impl);
+
+	return res;
 }
 
 static int
