@@ -1,3 +1,10 @@
+pipewire (0.3.28-1+apertis1atari1) atari; urgency=medium
+
+  * Remaining atari changes:
+    * Disable ldac support; pulls in too many dependencies
+
+ -- Christopher Obbard <chris.obbard@collabora.com>  Thu, 27 May 2021 15:56:42 +0100
+
 pipewire (0.3.28-1+apertis1) apertis; urgency=medium
 
   * Sync updates from Debian Experimental
