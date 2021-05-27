@@ -14,6 +14,39 @@ pipewire_module_access = shared_library('pipewire-module-access', [ 'module-acce
   dependencies : [mathlib, dl_lib, pipewire_dep],
 )
 
+pipewire_module_loopback = shared_library('pipewire-module-loopback',
+  [ 'module-loopback.c' ],
+  c_args : pipewire_module_c_args,
+  include_directories : [configinc, spa_inc],
+  install : true,
+  install_dir : modules_install_dir,
+  install_rpath: modules_install_dir,
+  dependencies : [mathlib, dl_lib, pipewire_dep],
+)
+
+pipewire_module_filter_chain = shared_library('pipewire-module-filter-chain',
+  [ 'module-filter-chain.c',
+    'module-filter-chain/biquad.c' ],
+  c_args : pipewire_module_c_args,
+  include_directories : [configinc, spa_inc],
+  install : true,
+  install_dir : modules_install_dir,
+  install_rpath: modules_install_dir,
+  dependencies : [mathlib, dl_lib, pipewire_dep],
+)
+
+pipewire_module_echo_cancel = shared_library('pipewire-module-echo-cancel',
+  [ 'module-echo-cancel.c',
+    'module-echo-cancel/aec-null.c',
+    'module-echo-cancel/aec-webrtc.cc' ],
+  c_args : pipewire_module_c_args,
+  include_directories : [configinc, spa_inc],
+  install : true,
+  install_dir : modules_install_dir,
+  install_rpath: modules_install_dir,
+  dependencies : [mathlib, dl_lib, pipewire_dep],
+)
+
 pipewire_module_profiler = shared_library('pipewire-module-profiler',
   [ 'module-profiler.c',
     'module-profiler/protocol-native.c', ],
@@ -98,10 +131,18 @@ pipewire_module_protocol_pulse = shared_library('pipewire-module-protocol-pulse'
   [ 'module-protocol-pulse.c',
     'module-protocol-pulse/manager.c',
     'module-protocol-pulse/pulse-server.c',
+    'module-protocol-pulse/modules/module-ladspa-sink.c',
+    'module-protocol-pulse/modules/module-ladspa-source.c',
     'module-protocol-pulse/modules/module-loopback.c',
     'module-protocol-pulse/modules/module-native-protocol-tcp.c',
     'module-protocol-pulse/modules/module-null-sink.c',
+    'module-protocol-pulse/modules/module-pipe-sink.c',
+    'module-protocol-pulse/modules/module-remap-sink.c',
+    'module-protocol-pulse/modules/module-remap-source.c',
     'module-protocol-pulse/modules/module-simple-protocol-tcp.c',
+    'module-protocol-pulse/modules/module-tunnel-sink.c',
+    'module-protocol-pulse/modules/module-tunnel-source.c',
+    'module-protocol-pulse/modules/module-zeroconf-discover.c',
   ],
   c_args : pipewire_module_c_args,
   include_directories : [configinc, spa_inc],
@@ -110,6 +151,18 @@ pipewire_module_protocol_pulse = shared_library('pipewire-module-protocol-pulse'
   install_rpath: modules_install_dir,
   dependencies : pipewire_module_protocol_pulse_deps,
 )
+
+if pulseaudio_dep.found()
+  pipewire_module_pulse_tunnel = shared_library('pipewire-module-pulse-tunnel',
+  [ 'module-pulse-tunnel.c' ],
+  c_args : pipewire_module_c_args,
+  include_directories : [configinc, spa_inc],
+  install : true,
+  install_dir : modules_install_dir,
+  install_rpath: modules_install_dir,
+  dependencies : [mathlib, dl_lib, pipewire_dep, pulseaudio_dep],
+)
+endif
 
 pipewire_module_protocol_simple = shared_library('pipewire-module-protocol-simple',
   [ 'module-protocol-simple.c' ],
@@ -213,3 +266,16 @@ pipewire_module_session_manager = shared_library('pipewire-module-session-manage
   install_rpath: modules_install_dir,
   dependencies : [mathlib, dl_lib, pipewire_dep],
 )
+
+if avahi_dep.found()
+pipewire_module_zeroconf_discover = shared_library('pipewire-module-zeroconf-discover',
+  [ 'module-zeroconf-discover.c',
+    'module-zeroconf-discover/avahi-poll.c' ],
+  c_args : pipewire_module_c_args,
+  include_directories : [configinc, spa_inc],
+  install : true,
+  install_dir : modules_install_dir,
+  install_rpath: modules_install_dir,
+  dependencies : [mathlib, dl_lib, rt_lib, pipewire_dep, avahi_dep],
+)
+endif

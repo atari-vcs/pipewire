@@ -42,7 +42,8 @@ enum spa_prop_info {
 					  *  is of the type of the property, the second
 					  *  one is a string with a user readable label
 					  *  for the value. */
-	SPA_PROP_INFO_container,	/**< type of container if any */
+	SPA_PROP_INFO_container,	/**< type of container if any (Id) */
+	SPA_PROP_INFO_params,		/**< is part of params property (Bool) */
 };
 
 /** predefined properties for SPA_TYPE_OBJECT_Props */
@@ -86,6 +87,9 @@ enum spa_prop {
 	SPA_PROP_monitorVolumes,		/**< a volume array, one volume per
 						  *  channel (Array of Float) */
 	SPA_PROP_latencyOffsetNsec,		/**< delay adjustment */
+	SPA_PROP_softMute,			/**< mute (Bool) */
+	SPA_PROP_softVolumes,			/**< a volume array, one volume per
+						  *  channel (Array of Float) */
 
 	SPA_PROP_START_Video	= 0x20000,	/**< video related properties */
 	SPA_PROP_brightness,
@@ -96,6 +100,13 @@ enum spa_prop {
 	SPA_PROP_exposure,
 	SPA_PROP_gain,
 	SPA_PROP_sharpness,
+
+	SPA_PROP_START_Other	= 0x80000,	/**< other properties */
+	SPA_PROP_params,			/**< simple control params
+						  *    (Struct(
+						  *	  (String : key,
+						  *	   Pod    : value)*)) */
+
 
 	SPA_PROP_START_CUSTOM	= 0x1000000,
 };

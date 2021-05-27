@@ -1,9 +1,43 @@
-pipewire (0.3.26-1apertis1vcs1) atari; urgency=medium
+pipewire (0.3.28-1+apertis1atari1) atari; urgency=medium
 
   * Remaining atari changes:
     * Disable ldac support; pulls in too many dependencies
 
- -- Christopher Obbard <chris.obbard@collabora.com>  Wed, 12 May 2021 14:43:45 +0100
+ -- Christopher Obbard <chris.obbard@collabora.com>  Thu, 27 May 2021 15:56:42 +0100
+
+pipewire (0.3.28-1+apertis1) apertis; urgency=medium
+
+  * Sync updates from Debian Experimental
+  * Continue to disable build-depends
+    - libsdl2 (not needed)
+    - libjack-jackd2-dev (not needed)
+    - libopenaptx-dev (proprietary codec, unknown legal status)
+  * Add apparmor rules
+
+ -- Frédéric Danis <frederic.danis@collabora.com>  Tue, 27 May 2021 16:12:50 +0200
+
+pipewire (0.3.28-1) experimental; urgency=medium
+
+  [ Frédéric Danis ]
+  * Split pipewire-media-session from pipewire-bin package
+  * Split pipewire-pulse from pipewire-bin package
+
+  [ Sjoerd Simons ]
+  * Install user systemd units by default
+  * Update readme for seperate pipewire-pulse
+  * New upstream release
+  * Disable avahi module at least for now
+  * Don't install the filter-chain example configurations
+  * Update libpipewire-0.3-0 symbol file
+  * Remove configuration files that moved to /usr/share
+
+ -- Sjoerd Simons <sjoerd@debian.org>  Sat, 22 May 2021 16:19:10 +0200
+
+pipewire (0.3.27-1) experimental; urgency=medium
+
+  * New upstream release
+
+ -- Sjoerd Simons <sjoerd@debian.org>  Wed, 12 May 2021 20:37:03 +0200
 
 pipewire (0.3.26-1apertis1) apertis; urgency=medium
 
