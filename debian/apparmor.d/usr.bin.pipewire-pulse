@@ -1,0 +1,34 @@
+#include <tunables/global>
+
+profile /usr/bin/pipewire-pulse {
+  #include <abstractions/chaiwala-base>
+  #include <abstractions/dbus-strict>
+  #include <abstractions/dbus-session-strict>
+  #include <abstractions/nameservice>
+  #include <abstractions/pipewire>
+  #include <abstractions/user-tmp>
+  #include <abstractions/orc>
+
+  dbus send
+       bus=session
+       path=/org/freedesktop/DBus
+       interface=org.freedesktop.DBus
+       member={RequestName,ReleaseName}
+       peer=(name=org.freedesktop.DBus),
+  dbus bind bus=session name=org.pulseaudio.Server,
+
+  @{HOME}/.config/pulse/                       rw,
+  @{HOME}/.config/pulse/**                     rw,
+
+  /                                            r,
+  /etc/pipewire/*.conf                         r,
+  owner @{PROC}/*/stat                         r,
+  owner @{PROC}/*/fd/                          r,
+  owner @{PROC}/*/fd/*                         r,
+
+
+  # This seems to be mediated as ptrace(trace), ptrace(traceby).
+  ptrace (read) peer=unconfined,
+
+  /run/user/*/pipewire*                        rw,
+}

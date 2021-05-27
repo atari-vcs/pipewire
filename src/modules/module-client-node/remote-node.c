@@ -156,6 +156,7 @@ static void clean_transport(struct node_data *data)
 
 static void mix_init(struct mix *mix, struct pw_impl_port *port, uint32_t mix_id)
 {
+	pw_log_debug("port %p: mix init %d.%d", port, port->port_id, mix_id);
 	mix->port = port;
 	mix->mix_id = mix_id;
 	pw_impl_port_init_mix(port, &mix->mix);
@@ -214,8 +215,11 @@ static struct mix *find_mix(struct node_data *data,
 
 	spa_list_for_each(mix, &data->mix[direction], link) {
 		if (mix->port->port_id == port_id &&
-		    mix->mix_id == mix_id)
+		    mix->mix_id == mix_id) {
+			pw_log_debug("port %p: found mix %d:%d.%d", mix->port,
+					direction, port_id, mix_id);
 			return mix;
+		}
 	}
 	return NULL;
 }
@@ -668,8 +672,8 @@ client_node_port_use_buffers(void *object,
 		}
 		memcpy(b, buffers[i].buffer, sizeof(struct spa_buffer));
 
-		b->metas = SPA_MEMBER(b, sizeof(struct spa_buffer), struct spa_meta);
-		b->datas = SPA_MEMBER(b->metas, sizeof(struct spa_meta) * b->n_metas,
+		b->metas = SPA_PTROFF(b, sizeof(struct spa_buffer), struct spa_meta);
+		b->datas = SPA_PTROFF(b->metas, sizeof(struct spa_meta) * b->n_metas,
 				       struct spa_data);
 
 		pw_log_debug("add buffer mem:%d id:%d offset:%u size:%u %p", mm->block->id,
@@ -679,7 +683,7 @@ client_node_port_use_buffers(void *object,
 		for (j = 0; j < b->n_metas; j++) {
 			struct spa_meta *m = &b->metas[j];
 			memcpy(m, &buffers[i].buffer->metas[j], sizeof(struct spa_meta));
-			m->data = SPA_MEMBER(mm->ptr, offset, void);
+			m->data = SPA_PTROFF(mm->ptr, offset, void);
 			offset += SPA_ROUND_UP_N(m->size, 8);
 		}
 
@@ -688,7 +692,7 @@ client_node_port_use_buffers(void *object,
 
 			memcpy(d, &buffers[i].buffer->datas[j], sizeof(struct spa_data));
 			d->chunk =
-			    SPA_MEMBER(mm->ptr, offset + sizeof(struct spa_chunk) * j,
+			    SPA_PTROFF(mm->ptr, offset + sizeof(struct spa_chunk) * j,
 				       struct spa_chunk);
 
 			if (flags & SPA_NODE_BUFFERS_FLAG_ALLOC)
@@ -713,7 +717,7 @@ client_node_port_use_buffers(void *object,
 						j, bm->id, bm->fd, d->maxsize);
 			} else if (d->type == SPA_DATA_MemPtr) {
 				int offs = SPA_PTR_TO_INT(d->data);
-				d->data = SPA_MEMBER(mm->ptr, offs, void);
+				d->data = SPA_PTROFF(mm->ptr, offs, void);
 				d->fd = -1;
 				pw_log_debug(" data %d id:%u -> mem:%p offs:%d maxsize:%d",
 						j, bid->id, d->data, offs, d->maxsize);
@@ -793,7 +797,7 @@ client_node_port_set_io(void *object,
 	}
 
 	if ((res = spa_node_port_set_io(mix->port->mix,
-			     direction, mix_id, id, ptr, size)) < 0) {
+			     direction, mix->mix.port.port_id, id, ptr, size)) < 0) {
 		if (res == -ENOTSUP)
 			res = 0;
 		else
@@ -962,6 +966,8 @@ static void do_node_init(struct node_data *data)
 
 static void clear_mix(struct node_data *data, struct mix *mix)
 {
+	pw_log_debug("port %p: mix clear %d.%d", mix->port, mix->port->port_id, mix->mix_id);
+
 	deactivate_mix(data, mix);
 
 	spa_list_remove(&mix->link);
@@ -1207,7 +1213,7 @@ static struct pw_proxy *node_export(struct pw_core *core, void *object, bool do_
 		goto error;
 
 	data = pw_proxy_get_user_data(client_node);
-	data = SPA_MEMBER(data, user_data_size, struct node_data);
+	data = SPA_PTROFF(data, user_data_size, struct node_data);
 	data->pool = pw_core_get_mempool(core);
 	data->node = node;
 	data->do_free = do_free;

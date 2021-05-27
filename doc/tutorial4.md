@@ -1,6 +1,6 @@
-[[previous]](tutorial3.md) [[index]](tutorial-index.md) [[next]](tutorial5.md)
+# Tutorial - Part 4: Playing a tone
 
-# Playing a tone (Tutorial 4)
+[[previous]](tutorial3.md) [[index]](tutorial-index.md) [[next]](tutorial5.md)
 
 In this tutorial we show how to use a stream to play a tone.
 
@@ -184,7 +184,7 @@ static const struct pw_stream_events stream_events = {
 ```
 
 We are for the moment only interested now in the `process` event. This event
-is called whenever we need to produce more data. We'll see how that function 
+is called whenever we need to produce more data. We'll see how that function
 is implemented but first we need to setup the format of the stream:
 
 ```c
@@ -226,7 +226,7 @@ Now we're ready to connect the stream and run the main loop:
 ```
 
 To connect we specify that we have a `PW_DIRECTION_OUTPUT` stream. `PW_ID_ANY`
-means that we are ok with conneting to any consumer. Next we set some flags:
+means that we are ok with connecting to any consumer. Next we set some flags:
 
 * `PW_STREAM_FLAG_AUTOCONNECT`  automatically connect this stream. This instructs
                                 the session manager to link us to some consumer.

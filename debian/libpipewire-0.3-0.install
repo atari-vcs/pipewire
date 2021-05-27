@@ -1,1 +1,2 @@
 usr/lib/*/libpipewire*.so.*
+debian/apparmor.d/abstractions/pipewire etc/apparmor.d/abstractions/
