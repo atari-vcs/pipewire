@@ -28,7 +28,7 @@ profile /usr/bin/pipewire-pulse {
 
 
   # This seems to be mediated as ptrace(trace), ptrace(traceby).
-  ptrace (read) peer=unconfined,
+  ptrace (read),
 
   /run/user/*/pipewire*                        rw,
 }
