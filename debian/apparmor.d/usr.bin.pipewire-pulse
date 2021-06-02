@@ -17,6 +17,8 @@ profile /usr/bin/pipewire-pulse {
        peer=(name=org.freedesktop.DBus),
   dbus bind bus=session name=org.pulseaudio.Server,
 
+  capability sys_ptrace,
+
   @{HOME}/.config/pulse/                       rw,
   @{HOME}/.config/pulse/**                     rw,
 
