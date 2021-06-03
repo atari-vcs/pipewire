@@ -1,6 +1,8 @@
 #include <tunables/global>
 
-profile /usr/bin/pipewire-pulse {
+# attach_disconnected flag is needed to open /proc/<pid>/root
+# when called from flatpak containers
+profile /usr/bin/pipewire-pulse flags=(attach_disconnected) {
   #include <abstractions/chaiwala-base>
   #include <abstractions/dbus-strict>
   #include <abstractions/dbus-session-strict>
@@ -27,6 +29,7 @@ profile /usr/bin/pipewire-pulse {
   owner @{PROC}/*/stat                         r,
   owner @{PROC}/*/fd/                          r,
   owner @{PROC}/*/fd/*                         r,
+  /.flatpak-info                               r,
 
 
   # This seems to be mediated as ptrace(trace), ptrace(traceby).
