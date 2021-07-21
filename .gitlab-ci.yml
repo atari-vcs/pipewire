@@ -15,11 +15,14 @@ include:
   - project: 'freedesktop/ci-templates'
     ref: *templates_sha
     file: '/templates/fedora.yml'
+  - project: 'freedesktop/ci-templates'
+    ref: *templates_sha
+    file: '/templates/ubuntu.yml'
 
 .fedora:
   variables:
     # Update this tag when you want to trigger a rebuild
-    FDO_DISTRIBUTION_TAG: '2021-05-10.0'
+    FDO_DISTRIBUTION_TAG: '2021-07-06.0'
     FDO_DISTRIBUTION_VERSION: '33'
     FDO_DISTRIBUTION_PACKAGES: >-
       alsa-lib-devel
@@ -45,8 +48,41 @@ include:
       SDL2-devel
       systemd-devel
       vulkan-loader-devel
+      webrtc-audio-processing-devel
       which
+      valgrind
       xmltoman
+
+.ubuntu:
+  variables:
+    # Update this tag when you want to trigger a rebuild
+    FDO_DISTRIBUTION_TAG: '2021-06-18.0'
+    FDO_DISTRIBUTION_VERSION: '20.04'
+    FDO_DISTRIBUTION_PACKAGES: >-
+      debhelper-compat
+      findutils
+      git
+      libasound2-dev
+      libavcodec-dev
+      libavfilter-dev
+      libavformat-dev
+      libdbus-1-dev
+      libglib2.0-dev
+      libgstreamer1.0-dev
+      libgstreamer-plugins-base1.0-dev
+      libsbc-dev
+      libsdl2-dev
+      libudev-dev
+      libva-dev
+      libv4l-dev
+      libx11-dev
+      ninja-build
+      pkg-config
+      systemd
+      xmltoman
+      python3-pip
+    FDO_DISTRIBUTION_EXEC: >-
+      pip3 install meson
 
 .coverity:
   variables:
@@ -91,6 +127,14 @@ include:
     paths:
       - build-*/meson-logs
 
+container_ubuntu:
+  extends:
+    - .ubuntu
+    - .fdo.container-build@ubuntu
+  stage: container
+  variables:
+    GIT_STRATEGY: none # no need to pull the whole tree for rebuilding the image
+
 container_fedora:
   extends:
     - .fedora
@@ -107,6 +151,14 @@ container_coverity:
   stage: container_coverity
   variables:
     GIT_STRATEGY: none
+
+build_on_ubuntu:
+  extends:
+    - .ubuntu
+    - .not_coverity
+    - .fdo.distribution-image@ubuntu
+    - .build
+  stage: build
 
 .build_on_fedora:
   extends:
@@ -161,6 +213,14 @@ build_with_custom_options:
     - ninja -C "$BUILD_DIR"
     - ninja -C "$BUILD_DIR" test
 
+valgrind:
+  extends:
+    - .build_on_fedora
+  script:
+    - echo "Building with $MESON_OPTIONS"
+    - meson "$BUILD_DIR" . --prefix="$PREFIX" $MESON_OPTIONS
+    - meson test -C "$BUILD_DIR" --setup=valgrind
+
 build_with_coverity:
   extends:
     - .fedora
@@ -199,6 +259,14 @@ shellcheck:
   stage: analysis
   script:
     - shellcheck $(git grep -l "#\!/.*bin/.*sh")
+
+spellcheck:
+  extends:
+    - .build_on_fedora
+  stage: analysis
+  script:
+    - git ls-files | grep -v .gitlab-ci.yml | xargs -d '\n' sed -i 's/Pipewire/PipeWire/g'
+    - git diff --exit-code || (echo "Please fix the above spelling mistakes" && exit 1)
 
 pages:
   extends:

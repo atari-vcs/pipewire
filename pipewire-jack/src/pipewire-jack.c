@@ -22,9 +22,7 @@
  * DEALINGS IN THE SOFTWARE.
  */
 
-#ifdef HAVE_CONFIG_H
 #include "config.h"
-#endif
 
 #include <stdio.h>
 #include <unistd.h>
@@ -49,13 +47,20 @@
 
 #include <pipewire/pipewire.h>
 #include <pipewire/private.h>
+#include <pipewire/thread.h>
 #include <pipewire/data-loop.h>
 
-#include "extensions/client-node.h"
-#include "extensions/metadata.h"
+#include "pipewire/extensions/client-node.h"
+#include "pipewire/extensions/metadata.h"
 #include "pipewire-jack-extensions.h"
 
 #define JACK_DEFAULT_VIDEO_TYPE	"32 bit float RGBA video"
+
+/* use 512KB stack per thread - the default is way too high to be feasible
+ * with mlockall() on many systems */
+#define THREAD_STACK 524288
+
+#define DEFAULT_RT_MAX	88
 
 #define JACK_CLIENT_NAME_SIZE		128
 #define JACK_PORT_NAME_SIZE		256
@@ -109,9 +114,10 @@ struct object {
 
 	struct client *client;
 
-#define INTERFACE_Port	0
-#define INTERFACE_Node	1
-#define INTERFACE_Link	2
+#define INTERFACE_Invalid	0
+#define INTERFACE_Port		1
+#define INTERFACE_Node		2
+#define INTERFACE_Link		3
 	uint32_t type;
 	uint32_t id;
 
@@ -136,14 +142,16 @@ struct object {
 			uint32_t node_id;
 			uint32_t port_id;
 			uint32_t monitor_requests;
-			jack_latency_range_t capture_latency;
-			jack_latency_range_t playback_latency;
 			int32_t priority;
 			struct port *port;
 			bool is_monitor;
 			struct object *node;
+			struct spa_latency_info latency[2];
 		} port;
 	};
+	struct pw_proxy *proxy;
+	struct spa_hook proxy_listener;
+	struct spa_hook object_listener;
 };
 
 struct midi_buffer {
@@ -203,6 +211,15 @@ struct port {
 	enum spa_direction direction;
 	uint32_t id;
 	struct object *object;
+	struct pw_properties *props;
+	struct spa_port_info info;
+#define IDX_EnumFormat	0
+#define IDX_Buffers	1
+#define IDX_IO		2
+#define IDX_Format	3
+#define IDX_Latency	4
+#define N_PORT_PARAMS	5
+	struct spa_param_info params[N_PORT_PARAMS];
 
 	struct spa_io_buffers io;
 	struct spa_list mix;
@@ -243,9 +260,7 @@ struct context {
 
 #define GET_DIRECTION(f)	((f) & JackPortIsInput ? SPA_DIRECTION_INPUT : SPA_DIRECTION_OUTPUT)
 
-#define GET_IN_PORT(c,p)	(c->port_pool[SPA_DIRECTION_INPUT][p])
-#define GET_OUT_PORT(c,p)	(c->port_pool[SPA_DIRECTION_OUTPUT][p])
-#define GET_PORT(c,d,p)		(d == SPA_DIRECTION_INPUT ? GET_IN_PORT(c,p) : GET_OUT_PORT(c,p))
+#define GET_PORT(c,d,p)		((d >= 0 && d <=1 && p < c->n_port_pool[d]) ? c->port_pool[d][p] : NULL)
 
 struct metadata {
 	struct pw_metadata *proxy;
@@ -274,6 +289,8 @@ struct client {
 	int last_sync;
 	int last_res;
 	bool error;
+
+	struct spa_node_info info;
 
 	struct pw_registry *registry;
 	struct spa_hook registry_listener;
@@ -350,7 +367,7 @@ struct client {
 		struct spa_list target_links;
 	} rt;
 
-	int pending;
+	pthread_mutex_t rt_lock;
 
 	unsigned int started:1;
 	unsigned int active:1;
@@ -367,6 +384,7 @@ struct client {
 	unsigned int filter_name:1;
 	unsigned int freewheeling:1;
 	int self_connect_mode;
+	int rt_max;
 
 	jack_position_t jack_position;
 	jack_transport_state_t jack_state;
@@ -404,12 +422,23 @@ static struct object * alloc_object(struct client *c, int type)
 	return o;
 }
 
-static void free_object(struct client *c, struct object *o)
+static void unlink_object(struct client *c, struct object *o)
 {
 	pthread_mutex_lock(&c->context.lock);
-        spa_list_remove(&o->link);
+	spa_list_remove(&o->link);
 	pthread_mutex_unlock(&c->context.lock);
+}
+
+static void recycle_object(struct client *c, struct object *o)
+{
 	spa_list_append(&c->context.free_objects, &o->link);
+	o->type = INTERFACE_Invalid;
+}
+
+static void free_object(struct client *c, struct object *o)
+{
+	unlink_object(c, o);
+	recycle_object(c, o);
 }
 
 static void init_mix(struct mix *mix, uint32_t mix_id, struct port *port)
@@ -518,12 +547,15 @@ static struct port * alloc_port(struct client *c, enum spa_direction direction)
 	o->port.node_id = c->node_id;
 	o->port.port_id = p->id;
 	o->port.port = p;
+	o->port.latency[SPA_DIRECTION_INPUT] = SPA_LATENCY_INFO(SPA_DIRECTION_INPUT);
+	o->port.latency[SPA_DIRECTION_OUTPUT] = SPA_LATENCY_INFO(SPA_DIRECTION_OUTPUT);
 
 	p->valid = true;
 	p->zeroed = false;
 	p->client = c;
 	p->object = o;
 	spa_list_init(&p->mix);
+	p->props = pw_properties_new(NULL, NULL);
 
 	spa_list_append(&c->ports[direction], &p->link);
 
@@ -547,6 +579,7 @@ static void free_port(struct client *c, struct port *p)
 	spa_list_remove(&p->link);
 	p->valid = false;
 	free_object(c, p->object);
+	pw_properties_free(p->props);
 	spa_list_append(&c->free_ports[p->direction], &p->link);
 }
 
@@ -588,6 +621,22 @@ static struct object *find_port(struct client *c, const char *name)
 		if (is_port_default(c, o) && spa_streq(o->port.system, name))
 			return o;
 	}
+	return NULL;
+}
+
+static struct object *find_id(struct client *c, uint32_t id)
+{
+	struct object *o = pw_map_lookup(&c->context.globals, id);
+	if (o != NULL && o->type == INTERFACE_Invalid)
+		return NULL;
+	return o;
+}
+
+static struct object *find_type(struct client *c, uint32_t id, uint32_t type)
+{
+	struct object *o = find_id(c, id);
+	if (o != NULL && o->type == type)
+		return o;
 	return NULL;
 }
 
@@ -667,6 +716,29 @@ void jack_get_version(int *major_ptr, int *minor_ptr, int *micro_ptr, int *proto
 		*proto_ptr = 0;
 }
 
+#define do_callback(c,callback,...)				\
+({								\
+	if (c->callback) {					\
+		pw_thread_loop_unlock(c->context.loop);		\
+		pthread_mutex_lock(&c->rt_lock);		\
+		c->callback(__VA_ARGS__);			\
+		pthread_mutex_unlock(&c->rt_lock);		\
+		pw_thread_loop_lock(c->context.loop);		\
+	}							\
+})
+
+#define do_rt_callback_res(c,callback,...)			\
+({								\
+	int res = 0;						\
+	if (c->callback) {					\
+		if (pthread_mutex_trylock(&c->rt_lock) == 0) {	\
+			res = c->callback(__VA_ARGS__);		\
+			pthread_mutex_unlock(&c->rt_lock);	\
+		}						\
+	}							\
+	res;							\
+})
+
 SPA_EXPORT
 const char *
 jack_get_version_string(void)
@@ -696,8 +768,8 @@ static void on_error(void *data, uint32_t id, int seq, int res, const char *mess
 	if (id == PW_ID_CORE) {
 		client->error = true;
 		client->last_res = res;
-		if (client->shutdown_callback && !client->destroyed)
-			client->shutdown_callback(client->shutdown_arg);
+		if (!client->destroyed)
+			do_callback(client, shutdown_callback, client->shutdown_arg);
 	}
 	pw_thread_loop_signal(client->context.loop, false);
 }
@@ -711,6 +783,11 @@ static const struct pw_core_events core_events = {
 static int do_sync(struct client *client)
 {
 	int seq;
+
+	if (pw_thread_loop_in_thread(client->context.loop)) {
+		pw_log_warn("sync requested from callback");
+		return 0;
+	}
 
 	seq = pw_proxy_sync((struct pw_proxy*)client->core, client->last_sync);
 
@@ -1013,14 +1090,16 @@ static inline jack_transport_state_t position_to_jack(struct pw_node_activation 
 	d->usecs = s->clock.nsec / SPA_NSEC_PER_USEC;
 	d->frame_rate = s->clock.rate.denom;
 
-	running = s->clock.position - s->offset;
-
-	if (running >= seg->start &&
-	    (seg->duration == 0 || running < seg->start + seg->duration))
-		d->frame = (running - seg->start) * seg->rate + seg->position;
-	else
+	if ((int64_t)s->clock.position < s->offset) {
 		d->frame = seg->position;
-
+	} else {
+		running = s->clock.position - s->offset;
+		if (running >= seg->start &&
+		    (seg->duration == 0 || running < seg->start + seg->duration))
+			d->frame = (running - seg->start) * seg->rate + seg->position;
+		else
+			d->frame = seg->position;
+	}
 	d->valid = 0;
 	if (a->segment_owner[0] && SPA_FLAG_IS_SET(seg->bar.flags, SPA_IO_SEGMENT_BAR_FLAG_VALID)) {
 		double abs_beat;
@@ -1058,25 +1137,18 @@ do_buffer_frames(struct spa_loop *loop,
 {
 	uint32_t buffer_frames = *((uint32_t*)data);
 	struct client *c = user_data;
-	if (c->bufsize_callback)
-		c->bufsize_callback(buffer_frames, c->bufsize_arg);
-	ATOMIC_DEC(c->pending);
+	do_callback(c, bufsize_callback, buffer_frames, c->bufsize_arg);
 	return 0;
 }
 
-static inline void check_buffer_frames(struct client *c, struct spa_io_position *pos, bool rt)
+static inline void check_buffer_frames(struct client *c, struct spa_io_position *pos)
 {
 	uint32_t buffer_frames = pos->clock.duration;
 	if (SPA_UNLIKELY(buffer_frames != c->buffer_frames)) {
 		pw_log_info(NAME" %p: bufferframes %d", c, buffer_frames);
-		ATOMIC_INC(c->pending);
 		c->buffer_frames = buffer_frames;
-		if (rt)
-			pw_loop_invoke(c->context.l, do_buffer_frames, 0,
-					&buffer_frames, sizeof(buffer_frames), false, c);
-		else
-			do_buffer_frames(c->context.l->loop, false, 0,
-					&buffer_frames, sizeof(buffer_frames), c);
+		pw_loop_invoke(c->context.l, do_buffer_frames, 0,
+				&buffer_frames, sizeof(buffer_frames), false, c);
 	}
 }
 
@@ -1086,25 +1158,18 @@ do_sample_rate(struct spa_loop *loop,
 {
 	struct client *c = user_data;
 	uint32_t sample_rate = *((uint32_t*)data);
-	if (c->srate_callback)
-		c->srate_callback(sample_rate, c->srate_arg);
-	ATOMIC_DEC(c->pending);
+	do_callback(c, srate_callback, sample_rate, c->srate_arg);
 	return 0;
 }
 
-static inline void check_sample_rate(struct client *c, struct spa_io_position *pos, bool rt)
+static inline void check_sample_rate(struct client *c, struct spa_io_position *pos)
 {
 	uint32_t sample_rate = pos->clock.rate.denom;
 	if (SPA_UNLIKELY(sample_rate != c->sample_rate)) {
 		pw_log_info(NAME" %p: sample_rate %d", c, sample_rate);
-		ATOMIC_INC(c->pending);
 		c->sample_rate = sample_rate;
-		if (rt)
-			pw_loop_invoke(c->context.l, do_sample_rate, 0,
-					&sample_rate, sizeof(sample_rate), false, c);
-		else
-			do_sample_rate(c->context.l->loop, false, 0,
-					&sample_rate, sizeof(sample_rate), c);
+		pw_loop_invoke(c->context.l, do_sample_rate, 0,
+				&sample_rate, sizeof(sample_rate), false, c);
 	}
 }
 
@@ -1117,7 +1182,6 @@ static inline uint32_t cycle_run(struct client *c)
 	struct pw_node_activation *activation = c->activation;
 	struct pw_node_activation *driver = c->rt.driver_activation;
 
-	/* this is blocking if nothing ready */
 	while (true) {
 		if (SPA_UNLIKELY(read(fd, &cmd, sizeof(cmd)) != sizeof(cmd))) {
 			if (errno == EINTR)
@@ -1146,8 +1210,8 @@ static inline uint32_t cycle_run(struct client *c)
 		return 0;
 	}
 
-	check_buffer_frames(c, pos, true);
-	check_sample_rate(c, pos, true);
+	check_buffer_frames(c, pos);
+	check_sample_rate(c, pos);
 
 	if (SPA_LIKELY(driver)) {
 		c->jack_state = position_to_jack(driver, &c->jack_position);
@@ -1172,13 +1236,18 @@ static inline uint32_t cycle_run(struct client *c)
 static inline uint32_t cycle_wait(struct client *c)
 {
 	int res;
+	uint32_t nframes;
 
-	res = pw_data_loop_wait(c->loop, -1);
-	if (SPA_UNLIKELY(res <= 0)) {
-		pw_log_warn(NAME" %p: wait error %m", c);
-		return 0;
-	}
-	return cycle_run(c);
+	do {
+		res = pw_data_loop_wait(c->loop, -1);
+		if (SPA_UNLIKELY(res <= 0)) {
+			pw_log_warn(NAME" %p: wait error %m", c);
+			return 0;
+		}
+		nframes = cycle_run(c);
+	} while (!nframes);
+
+	return nframes;
 }
 
 static inline void signal_sync(struct client *c)
@@ -1266,8 +1335,7 @@ on_rtsocket_condition(void *data, int fd, uint32_t mask)
 
 		buffer_frames = cycle_run(c);
 
-		if (!ATOMIC_LOAD(c->pending) && c->process_callback)
-			status = c->process_callback(buffer_frames, c->process_arg);
+		status = do_rt_callback_res(c, process_callback, buffer_frames, c->process_arg);
 
 		cycle_signal(c, status);
 	}
@@ -1394,6 +1462,7 @@ do_update_driver_activation(struct spa_loop *loop,
 
 static int update_driver_activation(struct client *c)
 {
+	jack_client_t *client = (jack_client_t*)c;
 	struct link *link;
 	bool freewheeling;
 
@@ -1401,9 +1470,19 @@ static int update_driver_activation(struct client *c)
 
 	freewheeling = SPA_FLAG_IS_SET(c->position->clock.flags, SPA_IO_CLOCK_FLAG_FREEWHEEL);
 	if (c->freewheeling != freewheeling) {
+		jack_native_thread_t thr = jack_client_thread_id(client);
+
 		c->freewheeling = freewheeling;
-		if (c->freewheel_callback)
-			c->freewheel_callback(freewheeling, c->freewheel_arg);
+		if (freewheeling && thr) {
+			jack_drop_real_time_scheduling(thr);
+		}
+
+		do_callback(c, freewheel_callback, freewheeling, c->freewheel_arg);
+
+		if (!freewheeling && thr) {
+			jack_acquire_real_time_scheduling(thr,
+					jack_client_real_time_priority(client));
+		}
 	}
 
 	link = find_activation(&c->links, c->driver_id);
@@ -1430,7 +1509,6 @@ static int client_node_set_io(void *object,
 
 	if (mem_id == SPA_ID_INVALID) {
 		mm = ptr = NULL;
-		size = 0;
 	} else {
 		mm = pw_mempool_map_id(c->pool, mem_id,
 				PW_MEMMAP_FLAG_READWRITE, offset, size, tag);
@@ -1449,13 +1527,12 @@ static int client_node_set_io(void *object,
 		c->driver_id = ptr ? c->position->clock.id : SPA_ID_INVALID;
 		update_driver_activation(c);
 		if (ptr)
-			check_sample_rate(c, c->position, false);
+			check_sample_rate(c, c->position);
 		break;
 	default:
 		break;
 	}
-	if (old != NULL)
-		pw_memmap_free(old);
+	pw_memmap_free(old);
 
 	return 0;
 }
@@ -1625,6 +1702,23 @@ static int param_io(struct client *c, struct port *p,
 	return 1;
 }
 
+static int param_latency(struct client *c, struct port *p,
+		struct spa_pod **param, struct spa_pod_builder *b)
+{
+	*param = spa_latency_build(b, SPA_PARAM_Latency,
+			&p->object->port.latency[p->direction]);
+	return 1;
+}
+
+static int param_latency_other(struct client *c, struct port *p,
+		struct spa_pod **param, struct spa_pod_builder *b)
+{
+	*param = spa_latency_build(b, SPA_PARAM_Latency,
+			&p->object->port.latency[SPA_DIRECTION_REVERSE(p->direction)]);
+	return 1;
+}
+
+/* called from thread-loop */
 static int port_set_format(struct client *c, struct port *p,
 		uint32_t flags, const struct spa_pod *param)
 {
@@ -1676,6 +1770,126 @@ static int port_set_format(struct client *c, struct port *p,
 	return 0;
 }
 
+/* called from thread-loop */
+static void port_update_latency(struct port *p)
+{
+	struct client *c = p->client;
+	struct spa_pod *params[6];
+	uint8_t buffer[4096];
+	struct spa_pod_builder b = SPA_POD_BUILDER_INIT(buffer, sizeof(buffer));
+
+	param_enum_format(c, p, &params[0], &b);
+	param_format(c, p, &params[1], &b);
+	param_buffers(c, p, &params[2], &b);
+	param_io(c, p, &params[3], &b);
+	param_latency(c, p, &params[4], &b);
+	param_latency_other(c, p, &params[5], &b);
+
+	pw_log_info("port %s: update", p->object->port.name);
+
+	p->info.change_mask |= SPA_PORT_CHANGE_MASK_PARAMS;
+	p->params[IDX_Latency].flags ^= SPA_PARAM_INFO_SERIAL;
+
+	pw_client_node_port_update(c->node,
+					 p->direction,
+					 p->id,
+					 PW_CLIENT_NODE_PORT_UPDATE_PARAMS |
+					 PW_CLIENT_NODE_PORT_UPDATE_INFO,
+					 SPA_N_ELEMENTS(params),
+					 (const struct spa_pod **) params,
+					 &p->info);
+	c->info.change_mask = 0;
+}
+
+/* called from thread-loop */
+static void default_latency(struct client *c, enum spa_direction direction,
+		struct spa_latency_info *latency)
+{
+	enum spa_direction other;
+	struct port *p;
+
+	*latency = SPA_LATENCY_INFO(direction);
+	other = SPA_DIRECTION_REVERSE(direction);
+
+	spa_list_for_each(p, &c->ports[other], link)
+		spa_latency_info_combine(latency, &p->object->port.latency[direction]);
+}
+
+/* called from thread-loop */
+static void default_latency_callback(jack_latency_callback_mode_t mode, struct client *c)
+{
+	struct spa_latency_info latency, *current;
+	enum spa_direction direction;
+	struct port *p;
+
+	if (mode == JackPlaybackLatency)
+		direction = SPA_DIRECTION_INPUT;
+	else
+		direction = SPA_DIRECTION_OUTPUT;
+
+	default_latency(c, direction, &latency);
+
+	pw_log_info("client %p: update %s latency %f-%f %d-%d %"PRIu64"-%"PRIu64, c,
+			latency.direction == SPA_DIRECTION_INPUT ? "playback" : "capture",
+			latency.min_quantum, latency.max_quantum,
+			latency.min_rate, latency.max_rate,
+			latency.min_ns, latency.max_ns);
+
+	spa_list_for_each(p, &c->ports[direction], link) {
+		current = &p->object->port.latency[direction];
+		if (spa_latency_info_compare(current, &latency) == 0)
+			continue;
+		*current = latency;
+		port_update_latency(p);
+	}
+}
+
+/* called from thread-loop */
+static int port_set_latency(struct client *c, struct port *p,
+		uint32_t flags, const struct spa_pod *param)
+{
+	struct spa_latency_info info;
+	jack_latency_callback_mode_t mode;
+	struct spa_latency_info *current;
+	int res;
+
+	if (param == NULL)
+		return 0;
+
+	if ((res = spa_latency_parse(param, &info)) < 0)
+		return res;
+
+	current = &p->object->port.latency[info.direction];
+	if (spa_latency_info_compare(current, &info) == 0)
+		return 0;
+
+	*current = info;
+
+	pw_log_info("port %s: set %s latency %f-%f %d-%d %"PRIu64"-%"PRIu64, p->object->port.name,
+			info.direction == SPA_DIRECTION_INPUT ? "playback" : "capture",
+			info.min_quantum, info.max_quantum,
+			info.min_rate, info.max_rate,
+			info.min_ns, info.max_ns);
+
+	if (info.direction == p->direction)
+		return 0;
+
+	if (info.direction == SPA_DIRECTION_INPUT)
+		mode = JackPlaybackLatency;
+	else
+		mode = JackCaptureLatency;
+
+	if (c->latency_callback)
+		do_callback(c, latency_callback, mode, c->latency_arg);
+	else
+		default_latency_callback(mode, c);
+
+	port_update_latency(p);
+
+	return 0;
+}
+
+/* called from thread-loop */
 static int client_node_port_set_param(void *object,
                                 enum spa_direction direction,
                                 uint32_t port_id,
@@ -1684,26 +1898,39 @@ static int client_node_port_set_param(void *object,
 {
 	struct client *c = (struct client *) object;
 	struct port *p = GET_PORT(c, direction, port_id);
-	struct spa_pod *params[4];
+	struct spa_pod *params[6];
 	uint8_t buffer[4096];
 	struct spa_pod_builder b = SPA_POD_BUILDER_INIT(buffer, sizeof(buffer));
 
-	pw_log_debug("port %p: %d.%d id:%d %p", p, direction, port_id, id, param);
+	if (p == NULL || !p->valid)
+		return -EINVAL;
 
-        if (id == SPA_PARAM_Format) {
+	pw_log_info("client %p: port %s %d.%d id:%d (%s) %p", c, p->object->port.name,
+			direction, port_id, id,
+			spa_debug_type_find_name(spa_type_param, id), param);
+
+	switch (id) {
+	case SPA_PARAM_Format:
 		port_set_format(c, p, flags, param);
+		break;
+	case SPA_PARAM_Latency:
+		return port_set_latency(c, p, flags, param);
+	default:
+		break;
 	}
 
 	param_enum_format(c, p, &params[0], &b);
 	param_format(c, p, &params[1], &b);
 	param_buffers(c, p, &params[2], &b);
 	param_io(c, p, &params[3], &b);
+	param_latency(c, p, &params[4], &b);
+	param_latency_other(c, p, &params[5], &b);
 
 	return pw_client_node_port_update(c->node,
 					 direction,
 					 port_id,
 					 PW_CLIENT_NODE_PORT_UPDATE_PARAMS,
-					 4,
+					 SPA_N_ELEMENTS(params),
 					 (const struct spa_pod **) params,
 					 NULL);
 }
@@ -1745,11 +1972,10 @@ static int client_node_port_use_buffers(void *object,
 	int res;
 	struct mix *mix;
 
-	if (!p->valid) {
+	if (p == NULL || !p->valid) {
 		res = -EINVAL;
 		goto done;
 	}
-
 	if ((mix = ensure_mix(c, p, mix_id)) == NULL) {
 		res = -ENOMEM;
 		goto done;
@@ -1895,6 +2121,11 @@ static int client_node_port_set_io(void *object,
         void *ptr;
 	int res = 0;
 
+	if (p == NULL || !p->valid) {
+		res = -EINVAL;
+		goto exit;
+	}
+
 	if ((mix = ensure_mix(c, p, mix_id)) == NULL) {
 		res = -ENOMEM;
 		goto exit;
@@ -1904,7 +2135,6 @@ static int client_node_port_set_io(void *object,
 
         if (mem_id == SPA_ID_INVALID) {
                 mm = ptr = NULL;
-                size = 0;
         }
         else {
 		mm = pw_mempool_map_id(c->pool, mem_id,
@@ -1928,8 +2158,7 @@ static int client_node_port_set_io(void *object,
 		break;
 	}
 exit_free:
-	if (old != NULL)
-		pw_memmap_free(old);
+	pw_memmap_free(old);
 exit:
 	if (res < 0)
 		pw_proxy_error((struct pw_proxy*)c->node, res, spa_strerror(res));
@@ -2126,10 +2355,7 @@ static int metadata_property(void *object, uint32_t id,
 				c->metadata->default_audio_source[0] = '\0';
 		}
 	} else {
-		pthread_mutex_lock(&c->context.lock);
-		o = pw_map_lookup(&c->context.globals, id);
-		pthread_mutex_unlock(&c->context.lock);
-		if (o == NULL)
+		if ((o = find_id(c, id)) == NULL)
 			return -EINVAL;
 
 		switch (o->type) {
@@ -2153,6 +2379,51 @@ static const struct pw_metadata_events metadata_events = {
 	.property = metadata_property
 };
 
+static void proxy_removed(void *data)
+{
+	struct object *o = data;
+	pw_proxy_destroy(o->proxy);
+}
+
+static void proxy_destroy(void *data)
+{
+	struct object *o = data;
+	spa_hook_remove(&o->proxy_listener);
+	spa_hook_remove(&o->object_listener);
+	o->proxy = NULL;
+}
+
+static const struct pw_proxy_events proxy_events = {
+	PW_VERSION_PROXY_EVENTS,
+	.removed = proxy_removed,
+	.destroy = proxy_destroy,
+};
+
+static void port_param(void *object, int seq,
+			uint32_t id, uint32_t index, uint32_t next,
+			const struct spa_pod *param)
+{
+	struct object *o = object;
+
+	switch (id) {
+	case SPA_PARAM_Latency:
+	{
+		struct spa_latency_info info;
+		if (spa_latency_parse(param, &info) < 0)
+			return;
+		o->port.latency[info.direction] = info;
+		break;
+	}
+	default:
+		break;
+	}
+}
+
+static const struct pw_port_events port_events = {
+	PW_VERSION_PORT,
+	.param = port_param,
+};
+
 #define FILTER_NAME	" ()[].:*$"
 #define FILTER_PORT	" ()[].*$"
 
@@ -2173,7 +2444,7 @@ static void registry_event_global(void *data, uint32_t id,
 	struct object *o, *ot, *op;
 	const char *str;
 	size_t size;
-	bool is_first = false;
+	bool is_first = false, graph_changed = false;
 
 	if (props == NULL)
 		return;
@@ -2302,10 +2573,9 @@ static void registry_event_global(void *data, uint32_t id,
 
 			pthread_mutex_lock(&c->context.lock);
 			spa_list_append(&c->context.ports, &o->link);
-			ot = pw_map_lookup(&c->context.globals, node_id);
 			pthread_mutex_unlock(&c->context.lock);
 
-			if (ot == NULL || ot->type != INTERFACE_Node)
+			if ((ot = find_type(c, node_id, INTERFACE_Node)) == NULL)
 				goto exit_free;
 
 			if (is_monitor && !c->merge_monitor)
@@ -2321,6 +2591,22 @@ static void registry_event_global(void *data, uint32_t id,
 			o->port.port_id = SPA_ID_INVALID;
 			o->port.priority = ot->node.priority;
 			o->port.node = ot;
+			o->port.latency[SPA_DIRECTION_INPUT] = SPA_LATENCY_INFO(SPA_DIRECTION_INPUT);
+			o->port.latency[SPA_DIRECTION_OUTPUT] = SPA_LATENCY_INFO(SPA_DIRECTION_OUTPUT);
+
+			o->proxy = pw_registry_bind(c->registry,
+				id, type, PW_VERSION_PORT, 0);
+			if (o->proxy) {
+				uint32_t ids[1] = { SPA_PARAM_Latency };
+
+				pw_proxy_add_listener(o->proxy,
+						&o->proxy_listener, &proxy_events, o);
+				pw_proxy_add_object_listener(o->proxy,
+						&o->object_listener, &port_events, o);
+
+				pw_port_subscribe_params((struct pw_port*)o->proxy,
+						ids, 1);
+			}
 		}
 
 		if ((str = spa_dict_lookup(props, PW_KEY_OBJECT_PATH)) != NULL)
@@ -2331,7 +2617,8 @@ static void registry_event_global(void *data, uint32_t id,
 
 		if ((str = spa_dict_lookup(props, PW_KEY_PORT_ID)) != NULL)
 			snprintf(o->port.system, sizeof(o->port.system), "system:%s_%d",
-					flags & JackPortIsInput ? "playback" : "capture",
+					flags & JackPortIsInput ? "playback" :
+					is_monitor ? "monitor" : "capture",
 					atoi(str)+1);
 
 		o->port.flags = flags;
@@ -2360,9 +2647,15 @@ static void registry_event_global(void *data, uint32_t id,
 			goto exit_free;
 		o->port_link.src = pw_properties_parse_int(str);
 
+		if (find_type(c, o->port_link.src, INTERFACE_Port) == NULL)
+			goto exit_free;
+
 		if ((str = spa_dict_lookup(props, PW_KEY_LINK_INPUT_PORT)) == NULL)
 			goto exit_free;
 		o->port_link.dst = pw_properties_parse_int(str);
+
+		if (find_type(c, o->port_link.dst, INTERFACE_Port) == NULL)
+			goto exit_free;
 
 		pw_log_debug(NAME" %p: add link %d %d->%d", c, id,
 				o->port_link.src, o->port_link.dst);
@@ -2370,7 +2663,10 @@ static void registry_event_global(void *data, uint32_t id,
 	else if (spa_streq(type, PW_TYPE_INTERFACE_Metadata)) {
 		struct pw_proxy *proxy;
 
-		if (c->metadata)
+		if (c->metadata != NULL)
+			goto exit;
+		if ((str = spa_dict_lookup(props, PW_KEY_METADATA_NAME)) != NULL &&
+		    !spa_streq(str, "default"))
 			goto exit;
 
 		proxy = pw_registry_bind(c->registry,
@@ -2399,25 +2695,31 @@ static void registry_event_global(void *data, uint32_t id,
 	pw_map_insert_at(&c->context.globals, id, o);
 	pthread_mutex_unlock(&c->context.lock);
 
-	pw_thread_loop_unlock(c->context.loop);
-
 	switch (o->type) {
 	case INTERFACE_Node:
-		if (c->registration_callback && is_first)
-			c->registration_callback(o->node.name, 1, c->registration_arg);
+		if (is_first) {
+			pw_log_info(NAME" %p: client added \"%s\"", c, o->node.name);
+			do_callback(c, registration_callback,
+					o->node.name, 1, c->registration_arg);
+			graph_changed = true;
+		}
 		break;
 
 	case INTERFACE_Port:
-		if (c->portregistration_callback)
-			c->portregistration_callback(o->id, 1, c->portregistration_arg);
+		pw_log_info(NAME" %p: port added %d \"%s\"", c, o->id, o->port.name);
+		do_callback(c, portregistration_callback,
+				o->id, 1, c->portregistration_arg);
+		graph_changed = true;
 		break;
 
 	case INTERFACE_Link:
-		if (c->connect_callback)
-			c->connect_callback(o->port_link.src, o->port_link.dst, 1, c->connect_arg);
+		do_callback(c, connect_callback,
+				o->port_link.src, o->port_link.dst, 1, c->connect_arg);
+		graph_changed = true;
 		break;
 	}
-	pw_thread_loop_lock(c->context.loop);
+	if (graph_changed)
+		do_callback(c, graph_callback, c->graph_arg);
 
       exit:
 	return;
@@ -2430,27 +2732,17 @@ static void registry_event_global_remove(void *object, uint32_t id)
 {
 	struct client *c = (struct client *) object;
 	struct object *o;
-	bool is_last = false;
+	bool graph_changed = false;
 
 	pw_log_debug(NAME" %p: removed: %u", c, id);
 
-	pthread_mutex_lock(&c->context.lock);
-	o = pw_map_lookup(&c->context.globals, id);
-	if (o != NULL)
-	        spa_list_remove(&o->link);
-	pthread_mutex_unlock(&c->context.lock);
-	if (o == NULL)
+	if ((o = find_id(c, id)) == NULL)
 		return;
 
-	/* JACK clients expect the objects to hang around after
-	 * they are unregistered. We keep the memory around for that
-	 * reason but reuse it when we can. */
-	spa_list_append(&c->context.free_objects, &o->link);
-
-	if (o->type == INTERFACE_Node)
-		is_last = find_node(c, o->node.name) == NULL;
-
-	pw_thread_loop_unlock(c->context.loop);
+	if (o->proxy) {
+		pw_proxy_destroy(o->proxy);
+		o->proxy = NULL;
+	}
 
 	switch (o->type) {
 	case INTERFACE_Node:
@@ -2460,20 +2752,40 @@ static void registry_event_global_remove(void *object, uint32_t id)
 			if (spa_streq(o->node.node_name, c->metadata->default_audio_source))
 				c->metadata->default_audio_source[0] = '\0';
 		}
-		if (c->registration_callback && is_last)
-			c->registration_callback(o->node.name, 0, c->registration_arg);
+		if (find_node(c, o->node.name) == NULL) {
+			pw_log_info(NAME" %p: client %u removed \"%s\"", c, o->id, o->node.name);
+			do_callback(c, registration_callback,
+					o->node.name, 0, c->registration_arg);
+			graph_changed = true;
+		}
 		break;
 	case INTERFACE_Port:
-		if (c->portregistration_callback)
-			c->portregistration_callback(o->id, 0, c->portregistration_arg);
+		pw_log_info(NAME" %p: port %u removed \"%s\"", c, o->id, o->port.name);
+		do_callback(c, portregistration_callback,
+				o->id, 0, c->portregistration_arg);
+		graph_changed = true;
 		break;
 	case INTERFACE_Link:
-		if (c->connect_callback)
-			c->connect_callback(o->port_link.src, o->port_link.dst, 0, c->connect_arg);
+		if (find_type(c, o->port_link.src, INTERFACE_Port) != NULL &&
+		    find_type(c, o->port_link.dst, INTERFACE_Port) != NULL) {
+			pw_log_info(NAME" %p: link %u %d -> %d removed", c, o->id,
+					o->port_link.src, o->port_link.dst);
+			do_callback(c, connect_callback,
+					o->port_link.src, o->port_link.dst, 0, c->connect_arg);
+			graph_changed = true;
+		} else
+			pw_log_warn("unlink between unknown ports %d and %d",
+					o->port_link.src, o->port_link.dst);
 		break;
 	}
-	pw_thread_loop_lock(c->context.loop);
+	if (graph_changed)
+		do_callback(c, graph_callback, c->graph_arg);
 
+	/* JACK clients expect the objects to hang around after
+	 * they are unregistered. We keep the memory around for that
+	 * reason but reuse it when we can. */
+	unlink_object(c, o);
+	recycle_object(c, o);
 	/* we keep the object available with the id because jack clients
 	 * tend to access the objects with it later.
 	 *
@@ -2517,7 +2829,6 @@ jack_client_t * jack_client_open (const char *client_name,
 	uint32_t n_support;
 	const char *str;
 	struct spa_cpu *cpu_iface;
-	struct spa_node_info ni;
 	va_list ap;
 
         if (getenv("PIPEWIRE_NOJACK") != NULL ||
@@ -2552,8 +2863,8 @@ jack_client_t * jack_client_open (const char *client_name,
 		goto no_props;
 
 	client->node_id = SPA_ID_INVALID;
-	snprintf(client->name, sizeof(client->name), "%s", client_name);
-	client->context.loop = pw_thread_loop_new(client_name, NULL);
+	snprintf(client->name, sizeof(client->name), "pw-%s", client_name);
+	client->context.loop = pw_thread_loop_new(client->name, NULL);
 	client->context.l = pw_thread_loop_get_loop(client->context.loop),
 	client->context.context = pw_context_new(
 			client->context.l,
@@ -2562,8 +2873,8 @@ jack_client_t * jack_client_open (const char *client_name,
 	if (client->context.context == NULL)
 		goto no_props;
 
-	client->allow_mlock = client->context.context->defaults.mem_allow_mlock;
-	client->warn_mlock = client->context.context->defaults.mem_warn_mlock;
+	client->allow_mlock = client->context.context->settings.mem_allow_mlock;
+	client->warn_mlock = client->context.context->settings.mem_warn_mlock;
 
 	if ((str = pw_context_get_conf_section(client->context.context,
 					"jack.properties")) != NULL)
@@ -2590,9 +2901,13 @@ jack_client_t * jack_client_open (const char *client_name,
 		else if (spa_streq(str, "ignore-all"))
 			client->self_connect_mode = SELF_CONNECT_IGNORE_ALL;
 	}
+	client->rt_max = DEFAULT_RT_MAX;
+	if ((str = pw_properties_get(client->props, "rt.prio")) != NULL)
+		client->rt_max = atoi(str);
 
 	spa_list_init(&client->context.free_objects);
 	pthread_mutex_init(&client->context.lock, NULL);
+	pthread_mutex_init(&client->rt_lock, NULL);
 	spa_list_init(&client->context.nodes);
 	spa_list_init(&client->context.ports);
 	spa_list_init(&client->context.links);
@@ -2679,15 +2994,17 @@ jack_client_t * jack_client_open (const char *client_name,
         pw_proxy_add_listener((struct pw_proxy*)client->node,
 			&client->proxy_listener, &node_proxy_events, client);
 
-	ni = SPA_NODE_INFO_INIT();
-	ni.max_input_ports = MAX_PORTS;
-	ni.max_output_ports = MAX_PORTS;
-	ni.change_mask = SPA_NODE_CHANGE_MASK_FLAGS;
-	ni.flags = SPA_NODE_FLAG_RT;
+	client->info = SPA_NODE_INFO_INIT();
+	client->info.max_input_ports = MAX_PORTS;
+	client->info.max_output_ports = MAX_PORTS;
+	client->info.change_mask = SPA_NODE_CHANGE_MASK_FLAGS |
+		SPA_NODE_CHANGE_MASK_PROPS;
+	client->info.flags = SPA_NODE_FLAG_RT;
+	client->info.props = &client->props->dict;
 
 	pw_client_node_update(client->node,
-                                    PW_CLIENT_NODE_UPDATE_INFO,
-				    0, NULL, &ni);
+			PW_CLIENT_NODE_UPDATE_INFO,
+			0, NULL, &client->info);
 
 	if (status)
 		*status = 0;
@@ -2706,7 +3023,7 @@ jack_client_t * jack_client_open (const char *client_name,
 		if (status)
 			*status |= JackNameNotUnique;
 		if (options & JackUseExactName)
-			goto exit;
+			goto exit_unlock;
 	}
 	pw_thread_loop_unlock(client->context.loop);
 
@@ -2777,6 +3094,7 @@ int jack_client_close (jack_client_t *client)
 	pw_log_debug(NAME" %p: free", client);
 	pw_map_clear(&c->context.globals);
 	pthread_mutex_destroy(&c->context.lock);
+	pthread_mutex_destroy(&c->rt_lock);
 	pw_properties_free(c->props);
 	free(c);
 
@@ -2870,14 +3188,11 @@ static int do_activate(struct client *c)
 {
 	int res;
 
-	pw_thread_loop_lock(c->context.loop);
-
 	pw_log_info(NAME" %p: activate", c);
 	pw_client_node_set_active(c->node, true);
 
 	res = do_sync(c);
 
-	pw_thread_loop_unlock(c->context.loop);
 	return res;
 }
 
@@ -2885,22 +3200,29 @@ SPA_EXPORT
 int jack_activate (jack_client_t *client)
 {
 	struct client *c = (struct client *) client;
-	int res;
+	int res = 0;
 
 	spa_return_val_if_fail(c != NULL, -EINVAL);
 
 	if (c->active)
 		return 0;
 
+	pw_thread_loop_lock(c->context.loop);
+
 	if ((res = do_activate(c)) < 0)
-		return res;
+		goto done;
 
 	c->activation->pending_new_pos = true;
 	c->activation->pending_sync = true;
 	c->active = true;
 
 	if (c->position)
-		check_buffer_frames(c, c->position, false);
+		check_buffer_frames(c, c->position);
+
+	do_callback(c, graph_callback, c->graph_arg);
+
+done:
+	pw_thread_loop_unlock(c->context.loop);
 
 	return 0;
 }
@@ -2948,7 +3270,15 @@ int jack_get_client_pid (const char *name)
 SPA_EXPORT
 jack_native_thread_t jack_client_thread_id (jack_client_t *client)
 {
-	return pthread_self();
+	struct client *c = (struct client *) client;
+	void *thr;
+
+	spa_return_val_if_fail(c != NULL, -EINVAL);
+
+	thr = pw_data_loop_get_thread(c->loop);
+	if (thr == NULL)
+		return pthread_self();
+	return *(pthread_t*)thr;
 }
 
 SPA_EXPORT
@@ -3229,7 +3559,7 @@ int jack_set_graph_order_callback (jack_client_t *client,
 		pw_log_error(NAME" %p: can't set callback on active client", c);
 		return -EIO;
 	}
-	pw_log_trace(NAME" %p: %p %p", c, graph_callback, data);
+	pw_log_debug(NAME" %p: %p %p", c, graph_callback, data);
 	c->graph_callback = graph_callback;
 	c->graph_arg = data;
 	return 0;
@@ -3276,21 +3606,21 @@ SPA_EXPORT
 int jack_set_freewheel(jack_client_t* client, int onoff)
 {
 	struct client *c = (struct client *) client;
-	struct spa_node_info ni;
-	struct spa_dict_item items[1];
 
 	pw_log_info(NAME" %p: freewheel %d", client, onoff);
 
-	ni = SPA_NODE_INFO_INIT();
-	ni.max_input_ports = MAX_PORTS;
-	ni.max_output_ports = MAX_PORTS;
-	ni.change_mask = SPA_NODE_CHANGE_MASK_PROPS;
-	items[0] = SPA_DICT_ITEM_INIT("node.group", onoff ? "pipewire.freewheel" : "");
-	ni.props = &SPA_DICT_INIT_ARRAY(items);
+	pw_thread_loop_lock(c->context.loop);
+	pw_properties_set(c->props, "node.group",
+			onoff ? "pipewire.freewheel" : "");
+
+	c->info.change_mask |= SPA_NODE_CHANGE_MASK_PROPS;
+	c->info.props = &c->props->dict;
 
 	pw_client_node_update(c->node,
                                     PW_CLIENT_NODE_UPDATE_INFO,
-				    0, NULL, &ni);
+				    0, NULL, &c->info);
+	c->info.change_mask = 0;
+	pw_thread_loop_unlock(c->context.loop);
 
 	return 0;
 }
@@ -3299,8 +3629,6 @@ SPA_EXPORT
 int jack_set_buffer_size (jack_client_t *client, jack_nframes_t nframes)
 {
 	struct client *c = (struct client *) client;
-	struct spa_node_info ni;
-	struct spa_dict_item items[1];
 	char latency[128];
 
 	spa_return_val_if_fail(c != NULL, -EINVAL);
@@ -3308,16 +3636,17 @@ int jack_set_buffer_size (jack_client_t *client, jack_nframes_t nframes)
 	snprintf(latency, sizeof(latency), "%d/%d", nframes, jack_get_sample_rate(client));
 	pw_log_info(NAME" %p: buffer-size %s", client, latency);
 
-	ni = SPA_NODE_INFO_INIT();
-	ni.max_input_ports = MAX_PORTS;
-	ni.max_output_ports = MAX_PORTS;
-	ni.change_mask = SPA_NODE_CHANGE_MASK_PROPS;
-	items[0] = SPA_DICT_ITEM_INIT(PW_KEY_NODE_LATENCY, latency);
-	ni.props = &SPA_DICT_INIT_ARRAY(items);
+	pw_thread_loop_lock(c->context.loop);
+	pw_properties_set(c->props, PW_KEY_NODE_LATENCY, latency);
+
+	c->info.change_mask |= SPA_NODE_CHANGE_MASK_PROPS;
+	c->info.props = &c->props->dict;
 
 	pw_client_node_update(c->node,
                                     PW_CLIENT_NODE_UPDATE_INFO,
-				    0, NULL, &ni);
+				    0, NULL, &c->info);
+	c->info.change_mask = 0;
+	pw_thread_loop_unlock(c->context.loop);
 
 	return 0;
 }
@@ -3341,7 +3670,7 @@ jack_nframes_t jack_get_sample_rate (jack_client_t *client)
 				res = c->position->clock.rate.denom;
 		}
 	}
-	pw_log_info("sample_rate: %u", res);
+	pw_log_debug("sample_rate: %u", res);
 	return res;
 }
 
@@ -3364,7 +3693,7 @@ jack_nframes_t jack_get_buffer_size (jack_client_t *client)
 				res = c->position->clock.duration;
 		}
 	}
-	pw_log_info("buffer_frames: %u", res);
+	pw_log_debug("buffer_frames: %u", res);
 	return res;
 }
 
@@ -3408,16 +3737,11 @@ jack_port_t * jack_port_register (jack_client_t *client,
 {
 	struct client *c = (struct client *) client;
 	enum spa_direction direction;
-	struct spa_port_info port_info;
-	struct spa_param_info port_params[5];
-	struct spa_dict dict;
-	struct spa_dict_item items[10];
 	struct object *o;
 	jack_port_type_id_t type_id;
 	uint8_t buffer[1024];
-	char port_flags[64];
 	struct spa_pod_builder b = SPA_POD_BUILDER_INIT(buffer, sizeof(buffer));
-	struct spa_pod *params[4];
+	struct spa_pod *params[6];
 	uint32_t n_params = 0;
 	struct port *p;
 	int res;
@@ -3481,33 +3805,36 @@ jack_port_t * jack_port_register (jack_client_t *client,
 
 	spa_list_init(&p->mix);
 
-	port_info = SPA_PORT_INFO_INIT();
-	port_info.change_mask |= SPA_PORT_CHANGE_MASK_FLAGS;
-	port_info.flags = SPA_PORT_FLAG_NO_REF;
-	port_info.change_mask |= SPA_PORT_CHANGE_MASK_PROPS;
-	dict = SPA_DICT_INIT(items, 0);
-	items[dict.n_items++] = SPA_DICT_ITEM_INIT(PW_KEY_FORMAT_DSP, port_type);
-	items[dict.n_items++] = SPA_DICT_ITEM_INIT(PW_KEY_PORT_NAME, port_name);
+	pw_properties_set(p->props, PW_KEY_FORMAT_DSP, port_type);
+	pw_properties_set(p->props, PW_KEY_PORT_NAME, port_name);
 	if (flags > 0x1f) {
-		snprintf(port_flags, sizeof(port_flags), "jack:flags:%lu", flags & ~0x1f);
-		items[dict.n_items++] = SPA_DICT_ITEM_INIT(PW_KEY_PORT_EXTRA, port_flags);
+		pw_properties_setf(p->props, PW_KEY_PORT_EXTRA,
+				"jack:flags:%lu", flags & ~0x1f);
 	}
 	if (flags & JackPortIsPhysical)
-		items[dict.n_items++] = SPA_DICT_ITEM_INIT(PW_KEY_PORT_PHYSICAL, "true");
+		pw_properties_set(p->props, PW_KEY_PORT_PHYSICAL, "true");
 	if (flags & JackPortIsTerminal)
-		items[dict.n_items++] = SPA_DICT_ITEM_INIT(PW_KEY_PORT_TERMINAL, "true");
-	port_info.props = &dict;
-	port_info.change_mask |= SPA_PORT_CHANGE_MASK_PARAMS;
-	port_params[0] = SPA_PARAM_INFO(SPA_PARAM_EnumFormat, SPA_PARAM_INFO_READ);
-	port_params[1] = SPA_PARAM_INFO(SPA_PARAM_Buffers, SPA_PARAM_INFO_READ);
-	port_params[2] = SPA_PARAM_INFO(SPA_PARAM_IO, SPA_PARAM_INFO_READ);
-	port_params[3] = SPA_PARAM_INFO(SPA_PARAM_Format, SPA_PARAM_INFO_WRITE);
-	port_info.params = port_params;
-	port_info.n_params = 4;
+		pw_properties_set(p->props, PW_KEY_PORT_TERMINAL, "true");
+
+	p->info = SPA_PORT_INFO_INIT();
+	p->info.change_mask |= SPA_PORT_CHANGE_MASK_FLAGS;
+	p->info.flags = SPA_PORT_FLAG_NO_REF;
+	p->info.change_mask |= SPA_PORT_CHANGE_MASK_PROPS;
+	p->info.props = &p->props->dict;
+	p->info.change_mask |= SPA_PORT_CHANGE_MASK_PARAMS;
+	p->params[IDX_EnumFormat] = SPA_PARAM_INFO(SPA_PARAM_EnumFormat, SPA_PARAM_INFO_READ);
+	p->params[IDX_Buffers] = SPA_PARAM_INFO(SPA_PARAM_Buffers, SPA_PARAM_INFO_READ);
+	p->params[IDX_IO] = SPA_PARAM_INFO(SPA_PARAM_IO, SPA_PARAM_INFO_READ);
+	p->params[IDX_Format] = SPA_PARAM_INFO(SPA_PARAM_Format, SPA_PARAM_INFO_WRITE);
+	p->params[IDX_Latency] = SPA_PARAM_INFO(SPA_PARAM_Latency, SPA_PARAM_INFO_READWRITE);
+	p->info.params = p->params;
+	p->info.n_params = N_PORT_PARAMS;
 
 	param_enum_format(c, p, &params[n_params++], &b);
 	param_buffers(c, p, &params[n_params++], &b);
 	param_io(c, p, &params[n_params++], &b);
+	param_latency(c, p, &params[n_params++], &b);
+	param_latency_other(c, p, &params[n_params++], &b);
 
 	pw_thread_loop_lock(c->context.loop);
 
@@ -3518,7 +3845,9 @@ jack_port_t * jack_port_register (jack_client_t *client,
 					 PW_CLIENT_NODE_PORT_UPDATE_INFO,
 					 n_params,
 					 (const struct spa_pod **) params,
-					 &port_info);
+					 &p->info);
+
+	p->info.change_mask = 0;
 
 	res = do_sync(c);
 
@@ -3546,13 +3875,15 @@ int jack_port_unregister (jack_client_t *client, jack_port_t *port)
 		pw_log_error(NAME" %p: invalid port %p", client, port);
 		return -EINVAL;
 	}
-	pw_log_info(NAME" %p: port unregister %p", client, port);
+	pw_log_info(NAME" %p: port %p unregister \"%s\"", client, port, o->port.name);
 
 	pw_thread_loop_lock(c->context.loop);
 
 	p = GET_PORT(c, GET_DIRECTION(o->port.flags), o->port.port_id);
-
-	free_port(c, p);
+	if (p == NULL || !p->valid) {
+		res = -EINVAL;
+		goto done;
+	}
 
 	pw_client_node_port_update(c->node,
 					 p->direction,
@@ -3561,6 +3892,9 @@ int jack_port_unregister (jack_client_t *client, jack_port_t *port)
 
 	res = do_sync(c);
 
+	free_port(c, p);
+
+done:
 	pw_thread_loop_unlock(c->context.loop);
 
 	return res;
@@ -3827,9 +4161,9 @@ const char ** jack_port_get_all_connections (const jack_client_t *client,
 	pthread_mutex_lock(&c->context.lock);
 	spa_list_for_each(l, &c->context.links, link) {
 		if (l->port_link.src == o->id)
-			p = pw_map_lookup(&c->context.globals, l->port_link.dst);
+			p = find_type(c, l->port_link.dst, INTERFACE_Port);
 		else if (l->port_link.dst == o->id)
-			p = pw_map_lookup(&c->context.globals, l->port_link.src);
+			p = find_type(c, l->port_link.src, INTERFACE_Port);
 		else
 			continue;
 
@@ -3878,9 +4212,7 @@ int jack_port_rename (jack_client_t* client, jack_port_t *port, const char *port
 	struct client *c = (struct client *) client;
 	struct object *o = (struct object *) port;
 	struct port *p;
-	struct spa_port_info port_info;
-	struct spa_dict dict;
-	struct spa_dict_item items[1];
+	int res = 0;
 
 	spa_return_val_if_fail(c != NULL, -EINVAL);
 	spa_return_val_if_fail(o != NULL, -EINVAL);
@@ -3888,23 +4220,34 @@ int jack_port_rename (jack_client_t* client, jack_port_t *port, const char *port
 
 	pw_thread_loop_lock(c->context.loop);
 
-	p = GET_PORT(c, GET_DIRECTION(o->port.flags), o->port.port_id);
+	pw_log_info(NAME" %p: port rename %p %s -> %s:%s",
+			client, port, o->port.name, c->name, port_name);
 
-	port_info = SPA_PORT_INFO_INIT();
-	port_info.change_mask |= SPA_PORT_CHANGE_MASK_PROPS;
-	dict = SPA_DICT_INIT(items, 0);
-	items[dict.n_items++] = SPA_DICT_ITEM_INIT(PW_KEY_PORT_NAME, port_name);
-	port_info.props = &dict;
+	p = GET_PORT(c, GET_DIRECTION(o->port.flags), o->port.port_id);
+	if (p == NULL || !p->valid) {
+		res = -EINVAL;
+		goto done;
+	}
+
+
+	pw_properties_set(p->props, PW_KEY_PORT_NAME, port_name);
+	snprintf(o->port.name, sizeof(o->port.name), "%s:%s", c->name, port_name);
+
+	p->info.change_mask |= SPA_PORT_CHANGE_MASK_PROPS;
+	p->info.props = &p->props->dict;
 
 	pw_client_node_port_update(c->node,
 					 p->direction,
 					 p->id,
 					 PW_CLIENT_NODE_PORT_UPDATE_INFO,
 					 0, NULL,
-					 &port_info);
+					 &p->info);
+	p->info.change_mask = 0;
+
+done:
 	pw_thread_loop_unlock(c->context.loop);
 
-	return 0;
+	return res;
 }
 
 SPA_EXPORT
@@ -3913,10 +4256,8 @@ int jack_port_set_alias (jack_port_t *port, const char *alias)
 	struct object *o = (struct object *) port;
 	struct client *c;
 	struct port *p;
-	struct spa_port_info port_info;
-	struct spa_dict dict;
-	struct spa_dict_item items[1];
 	const char *key;
+	int res = 0;
 
 	spa_return_val_if_fail(o != NULL, -EINVAL);
 	spa_return_val_if_fail(alias != NULL, -EINVAL);
@@ -3924,6 +4265,12 @@ int jack_port_set_alias (jack_port_t *port, const char *alias)
 	c = o->client;
 
 	pw_thread_loop_lock(c->context.loop);
+
+	p = GET_PORT(c, GET_DIRECTION(o->port.flags), o->port.port_id);
+	if (p == NULL || !p->valid) {
+		res = -EINVAL;
+		goto done;
+	}
 
 	if (o->port.alias1[0] == '\0') {
 		key = PW_KEY_OBJECT_PATH;
@@ -3933,30 +4280,28 @@ int jack_port_set_alias (jack_port_t *port, const char *alias)
 		key = PW_KEY_PORT_ALIAS;
 		snprintf(o->port.alias2, sizeof(o->port.alias2), "%s", alias);
 	}
-	else
-		goto error;
+	else {
+		res = -1;
+		goto done;
+	}
 
-	p = GET_PORT(c, GET_DIRECTION(o->port.flags), o->port.port_id);
+	pw_properties_set(p->props, key, alias);
 
-	port_info = SPA_PORT_INFO_INIT();
-	port_info.change_mask |= SPA_PORT_CHANGE_MASK_PROPS;
-	dict = SPA_DICT_INIT(items, 0);
-	items[dict.n_items++] = SPA_DICT_ITEM_INIT(key, alias);
-	port_info.props = &dict;
+	p->info.change_mask |= SPA_PORT_CHANGE_MASK_PROPS;
+	p->info.props = &p->props->dict;
 
 	pw_client_node_port_update(c->node,
 					 p->direction,
 					 p->id,
 					 PW_CLIENT_NODE_PORT_UPDATE_INFO,
 					 0, NULL,
-					 &port_info);
+					 &p->info);
+	p->info.change_mask = 0;
+
+done:
 	pw_thread_loop_unlock(c->context.loop);
 
-	return 0;
-
-error:
-	pw_thread_loop_unlock(c->context.loop);
-	return -1;
+	return res;
 }
 
 SPA_EXPORT
@@ -3965,10 +4310,8 @@ int jack_port_unset_alias (jack_port_t *port, const char *alias)
 	struct object *o = (struct object *) port;
 	struct client *c;
 	struct port *p;
-	struct spa_port_info port_info;
-	struct spa_dict dict;
-	struct spa_dict_item items[1];
 	const char *key;
+	int res = 0;
 
 	spa_return_val_if_fail(o != NULL, -EINVAL);
 	spa_return_val_if_fail(alias != NULL, -EINVAL);
@@ -3977,51 +4320,50 @@ int jack_port_unset_alias (jack_port_t *port, const char *alias)
 
 	pw_thread_loop_lock(c->context.loop);
 
+	p = GET_PORT(c, GET_DIRECTION(o->port.flags), o->port.port_id);
+	if (p == NULL || !p->valid) {
+		res = -EINVAL;
+		goto done;
+	}
+
 	if (spa_streq(o->port.alias1, alias))
 		key = PW_KEY_OBJECT_PATH;
 	else if (spa_streq(o->port.alias2, alias))
 		key = PW_KEY_PORT_ALIAS;
-	else
-		goto error;
+	else {
+		res = -1;
+		goto done;
+	}
 
-	p = GET_PORT(c, GET_DIRECTION(o->port.flags), o->port.port_id);
+	pw_properties_set(p->props, key, NULL);
 
-	port_info = SPA_PORT_INFO_INIT();
-	port_info.change_mask |= SPA_PORT_CHANGE_MASK_PROPS;
-	dict = SPA_DICT_INIT(items, 0);
-	items[dict.n_items++] = SPA_DICT_ITEM_INIT(key, NULL);
-	port_info.props = &dict;
+	p->info.change_mask |= SPA_PORT_CHANGE_MASK_PROPS;
+	p->info.props = &p->props->dict;
 
 	pw_client_node_port_update(c->node,
 					 p->direction,
 					 p->id,
 					 PW_CLIENT_NODE_PORT_UPDATE_INFO,
 					 0, NULL,
-					 &port_info);
+					 &p->info);
+	p->info.change_mask = 0;
+
+done:
 	pw_thread_loop_unlock(c->context.loop);
 
-	return 0;
-
-error:
-	pw_thread_loop_unlock(c->context.loop);
-	return -1;
+	return res;
 }
 
 SPA_EXPORT
 int jack_port_get_aliases (const jack_port_t *port, char* const aliases[2])
 {
 	struct object *o = (struct object *) port;
-	struct client *c;
 	int res = 0;
 
 	spa_return_val_if_fail(o != NULL, -EINVAL);
 	spa_return_val_if_fail(aliases != NULL, -EINVAL);
 	spa_return_val_if_fail(aliases[0] != NULL, -EINVAL);
 	spa_return_val_if_fail(aliases[1] != NULL, -EINVAL);
-
-	c = o->client;
-
-	pw_thread_loop_lock(c->context.loop);
 
 	if (o->port.alias1[0] != '\0') {
 		snprintf(aliases[0], REAL_JACK_PORT_NAME_SIZE+1, "%s", o->port.alias1);
@@ -4031,7 +4373,6 @@ int jack_port_get_aliases (const jack_port_t *port, char* const aliases[2])
 		snprintf(aliases[1], REAL_JACK_PORT_NAME_SIZE+1, "%s", o->port.alias2);
 		res++;
 	}
-	pw_thread_loop_unlock(c->context.loop);
 
 	return res;
 }
@@ -4230,7 +4571,7 @@ int jack_disconnect (jack_client_t *client,
 	spa_return_val_if_fail(source_port != NULL, -EINVAL);
 	spa_return_val_if_fail(destination_port != NULL, -EINVAL);
 
-	pw_log_debug(NAME" %p: disconnect %s %s", client, source_port, destination_port);
+	pw_log_info(NAME" %p: disconnect %s %s", client, source_port, destination_port);
 
 	pw_thread_loop_lock(c->context.loop);
 
@@ -4341,51 +4682,110 @@ void jack_port_get_latency_range (jack_port_t *port, jack_latency_callback_mode_
 {
 	struct object *o = (struct object *) port;
 	struct client *c;
+	jack_nframes_t nframes, rate;
+	int direction;
+	struct spa_latency_info *info;
 
 	spa_return_if_fail(o != NULL);
 	c = o->client;
 
-	if (o->port.flags & JackPortIsTerminal) {
-		jack_nframes_t nframes = jack_get_buffer_size((jack_client_t*)c);
-		if (o->port.flags & JackPortIsOutput) {
-			o->port.capture_latency.min = nframes;
-			o->port.capture_latency.max = nframes;
-		} else {
-			o->port.playback_latency.min = nframes;
-			o->port.playback_latency.max = nframes;
-		}
-	}
+	if (mode == JackCaptureLatency)
+		direction = SPA_DIRECTION_OUTPUT;
+	else
+		direction = SPA_DIRECTION_INPUT;
 
-	if (mode == JackCaptureLatency) {
-		*range = o->port.capture_latency;
-	} else {
-		*range = o->port.playback_latency;
-	}
+	nframes = jack_get_buffer_size((jack_client_t*)c);
+	rate = jack_get_sample_rate((jack_client_t*)c);
+	info = &o->port.latency[direction];
+
+	range->min = (info->min_quantum * nframes) +
+		info->min_rate + (info->min_ns * rate) / SPA_NSEC_PER_SEC;
+	range->max = (info->max_quantum * nframes) +
+		info->max_rate + (info->max_ns * rate) / SPA_NSEC_PER_SEC;
+
+	pw_log_debug(NAME" %p: get %d latency range %d %d", o, mode, range->min, range->max);
+}
+
+static int
+do_port_update_latency(struct spa_loop *loop,
+		bool async, uint32_t seq, const void *data, size_t size, void *user_data)
+{
+	struct port *p = user_data;
+	port_update_latency(p);
+	return 0;
 }
 
 SPA_EXPORT
 void jack_port_set_latency_range (jack_port_t *port, jack_latency_callback_mode_t mode, jack_latency_range_t *range)
 {
 	struct object *o = (struct object *) port;
+	struct client *c;
+	enum spa_direction direction;
+	struct spa_latency_info *current, latency;
+	jack_nframes_t nframes, rate;
+	struct port *p;
 
 	spa_return_if_fail(o != NULL);
+	c = o->client;
 
-	if (mode == JackCaptureLatency) {
-		o->port.capture_latency = *range;
-	} else {
-		o->port.playback_latency = *range;
-	}
+	if (mode == JackCaptureLatency)
+		direction = SPA_DIRECTION_OUTPUT;
+	else
+		direction = SPA_DIRECTION_INPUT;
+
+	pw_log_info(NAME" %p: %s set %d latency range %d %d", c, o->port.name, mode, range->min, range->max);
+
+	default_latency(c, direction, &latency);
+
+	nframes = jack_get_buffer_size((jack_client_t*)c);
+	rate = jack_get_sample_rate((jack_client_t*)c);
+
+	latency.min_rate = range->min - (latency.min_quantum * nframes) -
+		(latency.min_ns * rate) / SPA_NSEC_PER_SEC;
+	latency.max_rate = range->max - (latency.max_quantum * nframes) -
+		(latency.max_ns * rate) / SPA_NSEC_PER_SEC;
+
+	current = &o->port.latency[direction];
+
+	if ((p = o->port.port) == NULL)
+		return;
+	if (spa_latency_info_compare(current, &latency) == 0)
+		return;
+
+	pw_log_info("client %p: update %s latency %f-%f %d-%d %"PRIu64"-%"PRIu64, c,
+			latency.direction == SPA_DIRECTION_INPUT ? "playback" : "capture",
+			latency.min_quantum, latency.max_quantum,
+			latency.min_rate, latency.max_rate,
+			latency.min_ns, latency.max_ns);
+
+	*current = latency;
+
+	pw_loop_invoke(c->context.l, do_port_update_latency, 0,
+			NULL, 0, false, p);
+}
+
+static int
+do_recompute_latencies(struct spa_loop *loop,
+		bool async, uint32_t seq, const void *data, size_t size, void *user_data)
+{
+	struct client *c = user_data;
+	pw_log_debug("start");
+	do_callback(c, latency_callback, JackCaptureLatency, c->latency_arg);
+	do_callback(c, latency_callback, JackPlaybackLatency, c->latency_arg);
+	pw_log_debug("stop");
+	return 0;
 }
 
 SPA_EXPORT
 int jack_recompute_total_latencies (jack_client_t *client)
 {
-	pw_log_warn(NAME" %p: not implemented", client);
+	struct client *c = (struct client *) client;
+	pw_loop_invoke(c->context.l, do_recompute_latencies, 0,
+			NULL, 0, false, c);
 	return 0;
 }
 
-SPA_EXPORT
-jack_nframes_t jack_port_get_latency (jack_port_t *port)
+static jack_nframes_t port_get_latency (jack_port_t *port)
 {
 	struct object *o = (struct object *) port;
 	jack_latency_range_t range = { 0, 0 };
@@ -4402,11 +4802,16 @@ jack_nframes_t jack_port_get_latency (jack_port_t *port)
 }
 
 SPA_EXPORT
+jack_nframes_t jack_port_get_latency (jack_port_t *port)
+{
+	return port_get_latency(port);
+}
+
+SPA_EXPORT
 jack_nframes_t jack_port_get_total_latency (jack_client_t *client,
 					    jack_port_t *port)
 {
-	pw_log_warn(NAME" %p: not implemented %p", client, port);
-	return 0;
+	return port_get_latency(port);
 }
 
 SPA_EXPORT
@@ -4493,13 +4898,13 @@ const char ** jack_get_ports (jack_client_t *client,
 	if (type_name_pattern && type_name_pattern[0])
 		regcomp(&type_regex, type_name_pattern, REG_EXTENDED | REG_NOSUB);
 
-	pw_log_debug(NAME" %p: ports id:%d name:%s type:%s flags:%08lx", c, id,
+	pw_log_debug(NAME" %p: ports id:%d name:\"%s\" type:\"%s\" flags:%08lx", c, id,
 			port_name_pattern, type_name_pattern, flags);
 
 	pthread_mutex_lock(&c->context.lock);
 	count = 0;
 	spa_list_for_each(o, &c->context.ports, link) {
-		pw_log_debug(NAME" %p: check port type:%d flags:%08lx name:%s", c,
+		pw_log_debug(NAME" %p: check port type:%d flags:%08lx name:\"%s\"", c,
 				o->port.type_id, o->port.flags, o->port.name);
 		if (count == JACK_PORT_MAX)
 			break;
@@ -4524,7 +4929,7 @@ const char ** jack_get_ports (jack_client_t *client,
 				continue;
 		}
 
-		pw_log_debug(NAME" %p: port %s prio:%d matches (%d)",
+		pw_log_debug(NAME" %p: port \"%s\" prio:%d matches (%d)",
 				c, o->port.name, o->port.priority, count);
 		tmp[count++] = o;
 	}
@@ -4561,6 +4966,9 @@ jack_port_t * jack_port_by_name (jack_client_t *client, const char *port_name)
 	res = find_port(c, port_name);
 	pthread_mutex_unlock(&c->context.lock);
 
+	if (res == NULL)
+		pw_log_info(NAME" %p: port \"%s\" not found", c, port_name);
+
 	return (jack_port_t *)res;
 }
 
@@ -4569,22 +4977,19 @@ jack_port_t * jack_port_by_id (jack_client_t *client,
                                jack_port_id_t port_id)
 {
 	struct client *c = (struct client *) client;
-	struct object *res = NULL, *o;
+	struct object *res = NULL;
 
 	spa_return_val_if_fail(c != NULL, NULL);
 
 	pthread_mutex_lock(&c->context.lock);
 
-	o = pw_map_lookup(&c->context.globals, port_id);
-	pw_log_debug(NAME" %p: port %d -> %p", c, port_id, o);
+	res = find_type(c, port_id, INTERFACE_Port);
+	pw_log_debug(NAME" %p: port %d -> %p", c, port_id, res);
 
-	if (o == NULL || o->type != INTERFACE_Port)
-		goto exit;
-
-	res = o;
-
-      exit:
 	pthread_mutex_unlock(&c->context.lock);
+
+	if (res == NULL)
+		pw_log_info(NAME" %p: port %d not found", c, port_id);
 
 	return (jack_port_t *)res;
 }
@@ -4604,7 +5009,7 @@ jack_nframes_t jack_frames_since_cycle_start (const jack_client_t *client)
 
 	clock_gettime(CLOCK_MONOTONIC, &ts);
 	diff = SPA_TIMESPEC_TO_NSEC(&ts) - pos->clock.nsec;
-	return (jack_nframes_t) floor(((float)c->sample_rate * diff) / SPA_NSEC_PER_SEC);
+	return (jack_nframes_t) floor(((double)c->sample_rate * diff) / SPA_NSEC_PER_SEC);
 }
 
 SPA_EXPORT
@@ -4768,19 +5173,24 @@ int jack_set_sync_callback (jack_client_t *client,
 			    JackSyncCallback sync_callback,
 			    void *arg)
 {
-	int res;
+	int res = 0;
 	struct client *c = (struct client *) client;
 
 	spa_return_val_if_fail(c != NULL, -EINVAL);
+
+	pw_thread_loop_lock(c->context.loop);
 
 	c->sync_callback = sync_callback;
 	c->sync_arg = arg;
 
 	if ((res = do_activate(c)) < 0)
-		return res;
+		goto done;
 
 	c->activation->pending_sync = true;
-	return 0;
+done:
+	pw_thread_loop_unlock(c->context.loop);
+
+	return res;
 }
 
 SPA_EXPORT
@@ -4806,11 +5216,13 @@ int  jack_set_timebase_callback (jack_client_t *client,
 				 JackTimebaseCallback timebase_callback,
 				 void *arg)
 {
-	int res;
+	int res = 0;
 	struct client *c = (struct client *) client;
 
 	spa_return_val_if_fail(c != NULL, -EINVAL);
 	spa_return_val_if_fail(timebase_callback != NULL, -EINVAL);
+
+	pw_thread_loop_lock(c->context.loop);
 
 	c->timebase_callback = timebase_callback;
 	c->timebase_arg = arg;
@@ -4821,11 +5233,13 @@ int  jack_set_timebase_callback (jack_client_t *client,
 	pw_log_debug(NAME" %p: timebase set id:%u", c, c->node_id);
 
 	if ((res = do_activate(c)) < 0)
-		return res;
+		goto done;
 
 	c->activation->pending_new_pos = true;
+done:
+	pw_thread_loop_unlock(c->context.loop);
 
-	return 0;
+	return res;
 }
 
 SPA_EXPORT
@@ -4848,11 +5262,14 @@ jack_transport_state_t jack_transport_query (const jack_client_t *client,
 
 	spa_return_val_if_fail(c != NULL, JackTransportStopped);
 
-	if (SPA_LIKELY((a = c->rt.driver_activation) != NULL))
+	if (SPA_LIKELY((a = c->rt.driver_activation) != NULL)) {
 		jack_state = position_to_jack(a, pos);
-	else if (pos != NULL)
+	} else if ((a = c->driver_activation) != NULL) {
+		jack_state = position_to_jack(a, pos);
+	} else if (pos != NULL) {
 		memset(pos, 0, sizeof(jack_position_t));
-
+		pos->frame_rate = jack_get_sample_rate((jack_client_t*)client);
+	}
 	return jack_state;
 }
 
@@ -4877,7 +5294,7 @@ jack_nframes_t jack_get_current_transport_frame (const jack_client_t *client)
 		struct timespec ts;
 		clock_gettime(CLOCK_MONOTONIC, &ts);
 		uint64_t nsecs = SPA_TIMESPEC_TO_NSEC(&ts) - pos->clock.nsec;
-		running += (uint64_t)floor((((float) c->sample_rate) / SPA_NSEC_PER_SEC) * nsecs);
+		running += (uint64_t)floor((((double) c->sample_rate) / SPA_NSEC_PER_SEC) * nsecs);
 	}
 	seg = &pos->segments[0];
 
@@ -5054,20 +5471,42 @@ int jack_client_has_session_callback (jack_client_t *client, const char *client_
 SPA_EXPORT
 int jack_client_real_time_priority (jack_client_t * client)
 {
-	return 20;
+	return jack_client_max_real_time_priority(client) - 5;
 }
 
 SPA_EXPORT
 int jack_client_max_real_time_priority (jack_client_t *client)
 {
-	return 20;
+	struct client *c = (struct client *) client;
+	int min, max;
+
+	spa_return_val_if_fail(c != NULL, -1);
+
+	pw_thread_utils_get_rt_range(NULL, &min, &max);
+	return SPA_MIN(max, c->rt_max) - 1;
 }
+
+#define CHECK(expression,label)						\
+do {									\
+	if ((errno = expression) != 0) {				\
+		res = -errno;						\
+		pw_log_error(#expression ": %s", strerror(errno));	\
+		goto label;						\
+	}								\
+} while(false);
 
 SPA_EXPORT
 int jack_acquire_real_time_scheduling (jack_native_thread_t thread, int priority)
 {
-	pw_log_warn("not implemented %lu %d", thread, priority);
-	return -ENOTSUP;
+	pw_log_info("acquire");
+	return pw_thread_utils_acquire_rt((struct spa_thread*)thread, priority);
+}
+
+SPA_EXPORT
+int jack_drop_real_time_scheduling (jack_native_thread_t thread)
+{
+	pw_log_info("drop");
+	return pw_thread_utils_drop_rt((struct spa_thread*)thread);
 }
 
 /**
@@ -5094,20 +5533,43 @@ int jack_client_create_thread (jack_client_t* client,
                                void *(*start_routine)(void*),
                                void *arg)
 {
+	int res = 0;
+
 	spa_return_val_if_fail(client != NULL, -EINVAL);
 
-	if (globals.creator == NULL)
-		globals.creator = pthread_create;
+	pw_log_info("client %p: create thread rt:%d prio:%d", client, realtime, priority);
+	if (globals.creator != NULL) {
+		pthread_attr_t attributes;
 
-	pw_log_debug("client %p: create thread", client);
-	return globals.creator(thread, NULL, start_routine, arg);
-}
+		pthread_attr_init(&attributes);
+		CHECK(pthread_attr_setdetachstate(&attributes, PTHREAD_CREATE_JOINABLE), error);
+		CHECK(pthread_attr_setscope(&attributes, PTHREAD_SCOPE_SYSTEM), error);
+		CHECK(pthread_attr_setinheritsched(&attributes, PTHREAD_EXPLICIT_SCHED), error);
+		CHECK(pthread_attr_setstacksize(&attributes, THREAD_STACK), error);
 
-SPA_EXPORT
-int jack_drop_real_time_scheduling (jack_native_thread_t thread)
-{
-	pw_log_warn("not implemented %lu", thread);
-	return -ENOTSUP;
+		res = globals.creator(thread, &attributes, start_routine, arg);
+
+		pthread_attr_destroy(&attributes);
+	} else {
+		struct spa_thread *thr;
+
+		thr = pw_thread_utils_create(NULL, start_routine, arg);
+		if (thr == NULL)
+			res = -errno;
+		*thread = (pthread_t)thr;
+	}
+
+	if (res == 0 && realtime) {
+		/* Try to acquire RT scheduling, we don't fail here but the
+		 * function will emit a warning. Real JACK fails here. */
+		jack_acquire_real_time_scheduling(*thread, priority);
+	}
+
+error:
+	if (res != 0)
+		pw_log_warn("client %p: create RT thread failed: %s",
+				client, strerror(res));
+	return res;
 }
 
 SPA_EXPORT
@@ -5119,7 +5581,7 @@ int jack_client_stop_thread(jack_client_t* client, jack_native_thread_t thread)
 		return -EINVAL;
 
 	pw_log_debug("join thread %lu", thread);
-        pthread_join(thread, &status);
+	pw_thread_utils_join((struct spa_thread*)thread, &status);
 	pw_log_debug("stopped thread %lu", thread);
 	return 0;
 }
@@ -5133,9 +5595,9 @@ int jack_client_kill_thread(jack_client_t* client, jack_native_thread_t thread)
 		return -EINVAL;
 
 	pw_log_debug("cancel thread %lu", thread);
-        pthread_cancel(thread);
+	pthread_cancel(thread);
 	pw_log_debug("join thread %lu", thread);
-        pthread_join(thread, &status);
+	pw_thread_utils_join((struct spa_thread*)thread, &status);
 	pw_log_debug("stopped thread %lu", thread);
 	return 0;
 }
@@ -5143,10 +5605,7 @@ int jack_client_kill_thread(jack_client_t* client, jack_native_thread_t thread)
 SPA_EXPORT
 void jack_set_thread_creator (jack_thread_creator_t creator)
 {
-	if (creator == NULL)
-		globals.creator = pthread_create;
-	else
-		globals.creator = creator;
+	globals.creator = creator;
 }
 
 static inline uint8_t * midi_event_data (void* port_buffer,

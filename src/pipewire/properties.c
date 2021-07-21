@@ -93,8 +93,6 @@ static struct properties *properties_new(int prealloc)
  * \param key a first key
  * \param ... value and more keys NULL terminated
  * \return a newly allocated properties object
- *
- * \memberof pw_properties
  */
 SPA_EXPORT
 struct pw_properties *pw_properties_new(const char *key, ...)
@@ -123,8 +121,6 @@ struct pw_properties *pw_properties_new(const char *key, ...)
  *
  * \param dict a dictionary. keys and values are copied
  * \return a new properties object
- *
- * \memberof pw_properties
  */
 SPA_EXPORT
 struct pw_properties *pw_properties_new_dict(const struct spa_dict *dict)
@@ -146,6 +142,14 @@ struct pw_properties *pw_properties_new_dict(const struct spa_dict *dict)
 	return &impl->this;
 }
 
+/** Update the properties from the given string, overwriting any
+ * existing keys with the new values from \a str.
+ *
+ * \a str should be a whitespace separated list of key=value
+ * strings or a json object, see pw_properties_new_string().
+ *
+ * \return The number of properties added or updated
+ */
 SPA_EXPORT
 int pw_properties_update_string(struct pw_properties *props, const char *str, size_t size)
 {
@@ -165,8 +169,6 @@ int pw_properties_update_string(struct pw_properties *props, const char *str, si
 		if ((len = spa_json_next(&it[1], &value)) <= 0)
 			break;
 
-		if (key[0] == '#')
-			continue;
 		if (spa_json_is_null(value, len))
 			val = NULL;
 		else {
@@ -189,8 +191,6 @@ int pw_properties_update_string(struct pw_properties *props, const char *str, si
  *
  * \param object a property description
  * \return a new properties object
- *
- * \memberof pw_properties
  */
 SPA_EXPORT
 struct pw_properties *
@@ -217,8 +217,6 @@ error:
  *
  * \param properties properties to copy
  * \return a new properties object
- *
- * \memberof pw_properties
  */
 SPA_EXPORT
 struct pw_properties *pw_properties_copy(const struct pw_properties *properties)
@@ -232,12 +230,10 @@ struct pw_properties *pw_properties_copy(const struct pw_properties *properties)
  * \param dict properties to copy from
  * \param keys a NULL terminated list of keys to copy
  * \return the number of keys changed in \a dest
- *
- * \memberof pw_properties
  */
 SPA_EXPORT
 int pw_properties_update_keys(struct pw_properties *props,
-		const struct spa_dict *dict, const char *keys[])
+		const struct spa_dict *dict, const char * const keys[])
 {
 	int i, changed = 0;
 	const char *str;
@@ -249,7 +245,7 @@ int pw_properties_update_keys(struct pw_properties *props,
 	return changed;
 }
 
-static bool has_key(const char *keys[], const char *key)
+static bool has_key(const char * const keys[], const char *key)
 {
 	int i;
 	for (i = 0; keys[i]; i++) {
@@ -261,7 +257,7 @@ static bool has_key(const char *keys[], const char *key)
 
 SPA_EXPORT
 int pw_properties_update_ignore(struct pw_properties *props,
-		const struct spa_dict *dict, const char *ignore[])
+		const struct spa_dict *dict, const char * const ignore[])
 {
 	const struct spa_dict_item *it;
 	int changed = 0;
@@ -276,8 +272,6 @@ int pw_properties_update_ignore(struct pw_properties *props,
 /** Clear a properties object
  *
  * \param properties properties to clear
- *
- * \memberof pw_properties
  */
 SPA_EXPORT
 void pw_properties_clear(struct pw_properties *properties)
@@ -299,8 +293,6 @@ void pw_properties_clear(struct pw_properties *properties)
  *
  * The properties in \a props are updated with \a dict. Keys in \a dict
  * with NULL values are removed from \a props.
- *
- * \memberof pw_properties
  */
 SPA_EXPORT
 int pw_properties_update(struct pw_properties *props,
@@ -322,8 +314,6 @@ int pw_properties_update(struct pw_properties *props,
  * \return the number of added properties
  *
  * The properties from \a dict that are not yet in \a props are added.
- *
- * \memberof pw_properties
  */
 SPA_EXPORT
 int pw_properties_add(struct pw_properties *props,
@@ -348,12 +338,10 @@ int pw_properties_add(struct pw_properties *props,
  *
  * The properties with \a keys from \a dict that are not yet
  * in \a props are added.
- *
- * \memberof pw_properties
  */
 SPA_EXPORT
 int pw_properties_add_keys(struct pw_properties *props,
-		const struct spa_dict *dict, const char *keys[])
+		const struct spa_dict *dict, const char * const keys[])
 {
 	uint32_t i;
 	int added = 0;
@@ -371,13 +359,16 @@ int pw_properties_add_keys(struct pw_properties *props,
 /** Free a properties object
  *
  * \param properties the properties to free
- *
- * \memberof pw_properties
  */
 SPA_EXPORT
 void pw_properties_free(struct pw_properties *properties)
 {
-	struct properties *impl = SPA_CONTAINER_OF(properties, struct properties, this);
+	struct properties *impl;
+
+	if (properties == NULL)
+		return;
+
+	impl = SPA_CONTAINER_OF(properties, struct properties, this);
 	pw_properties_clear(properties);
 	pw_array_clear(&impl->items);
 	free(impl);
@@ -439,8 +430,6 @@ exit_noupdate:
  * Set the property in \a properties with \a key to \a value. Any previous value
  * of \a key will be overwritten. When \a value is NULL, the key will be
  * removed.
- *
- * \memberof pw_properties
  */
 SPA_EXPORT
 int pw_properties_set(struct pw_properties *properties, const char *key, const char *value)
@@ -472,8 +461,6 @@ int pw_properties_setva(struct pw_properties *properties,
  *
  * Set the property in \a properties with \a key to the value in printf style \a format
  * Any previous value of \a key will be overwritten.
- *
- * \memberof pw_properties
  */
 SPA_EXPORT
 int pw_properties_setf(struct pw_properties *properties, const char *key, const char *format, ...)
@@ -495,8 +482,6 @@ int pw_properties_setf(struct pw_properties *properties, const char *key, const 
  * \return the property for \a key or NULL when the key was not found
  *
  * Get the property in \a properties with \a key.
- *
- * \memberof pw_properties
  */
 SPA_EXPORT
 const char *pw_properties_get(const struct pw_properties *properties, const char *key)
@@ -520,8 +505,6 @@ const char *pw_properties_get(const struct pw_properties *properties, const char
  * to a pointer holding NULL to get the first element and will be updated
  * after each iteration. When NULL is returned, all elements have been
  * iterated.
- *
- * \memberof pw_properties
  */
 SPA_EXPORT
 const char *pw_properties_iterate(const struct pw_properties *properties, void **state)
@@ -542,26 +525,72 @@ const char *pw_properties_iterate(const struct pw_properties *properties, void *
 	return pw_array_get_unchecked(&impl->items, index, struct spa_dict_item)->key;
 }
 
+static int encode_string(FILE *f, const char *val)
+{
+	int len = 0;
+	len += fprintf(f, "\"");
+	while (*val) {
+		switch (*val) {
+		case '\n':
+			len += fprintf(f, "\\n");
+			break;
+		case '\r':
+			len += fprintf(f, "\\r");
+			break;
+		case '\b':
+			len += fprintf(f, "\\b");
+			break;
+		case '\t':
+			len += fprintf(f, "\\t");
+			break;
+		case '\f':
+			len += fprintf(f, "\\f");
+			break;
+		case '\\':
+		case '"':
+			len += fprintf(f, "\\%c", *val);
+		break;
+		default:
+			if (*val > 0 && *val < 0x20)
+				len += fprintf(f, "\\u%04x", *val);
+			else
+				len += fprintf(f, "%c", *val);
+			break;
+		}
+		val++;
+	}
+	len += fprintf(f, "\"");
+	return len-1;
+}
+
 SPA_EXPORT
 int pw_properties_serialize_dict(FILE *f, const struct spa_dict *dict, uint32_t flags)
 {
 	const struct spa_dict_item *it;
 	int count = 0;
+	char key[1024];
+
 	spa_dict_for_each(it, dict) {
 		size_t len = it->value ? strlen(it->value) : 0;
-		fprintf(f, " \"%s\" = ", it->key);
+
+		if (spa_json_encode_string(key, sizeof(key)-1, it->key) >= (int)sizeof(key)-1)
+			continue;
+
+		fprintf(f, "%s%s %s: ",
+				count == 0 ? "" : ",",
+				flags & PW_PROPERTIES_FLAG_NL ? "\n" : "",
+				key);
+
 		if (it->value == NULL) {
 			fprintf(f, "null");
 		} else if (spa_json_is_null(it->value, len) ||
 		    spa_json_is_float(it->value, len) ||
 		    spa_json_is_bool(it->value, len) ||
-		    spa_json_is_container(it->value, len)) {
+		    spa_json_is_container(it->value, len) ||
+		    spa_json_is_string(it->value, len)) {
 			fprintf(f, "%s", it->value);
 		} else {
-			size_t size = (len+1) * 4;
-			char str[size];
-			spa_json_encode_string(str, size, it->value);
-			fprintf(f, "%s", str);
+			encode_string(f, it->value);
 		}
 		count++;
 	}
