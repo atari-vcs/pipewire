@@ -658,9 +658,11 @@ spa_v4l2_enum_format(struct impl *this, int seq,
 			goto exit;
 		}
 		if (filter) {
+			static const struct spa_rectangle step = {1, 1};
+
+			const struct spa_rectangle *values;
 			const struct spa_pod_prop *p;
 			struct spa_pod *val;
-			const struct spa_rectangle step = { 1, 1 }, *values;
 			uint32_t choice, i, n_values;
 
 			/* check if we have a fixed frame size */
@@ -749,10 +751,12 @@ spa_v4l2_enum_format(struct impl *this, int seq,
 			goto exit;
 		}
 		if (filter) {
+			static const struct spa_fraction step = {1, 1};
+
+			const struct spa_fraction *values;
 			const struct spa_pod_prop *p;
 			struct spa_pod *val;
 			uint32_t i, n_values, choice;
-			const struct spa_fraction step = { 1, 1 }, *values;
 
 			if (!(p = spa_pod_find_prop(filter, NULL, SPA_FORMAT_VIDEO_framerate)))
 				goto have_framerate;
@@ -1462,7 +1466,7 @@ mmap_init(struct impl *this,
 
 		if (port->have_expbuf &&
 		    d[0].type != SPA_ID_INVALID &&
-		    (d[0].type & (1u << SPA_DATA_DmaBuf))) {
+		    (d[0].type & ((1u << SPA_DATA_DmaBuf)|(1u<<SPA_DATA_MemFd)))) {
 			struct v4l2_exportbuffer expbuf;
 
 			spa_zero(expbuf);
@@ -1479,7 +1483,10 @@ mmap_init(struct impl *this,
 				spa_log_error(this->log, "v4l2: '%s' VIDIOC_EXPBUF: %m", this->props.device);
 				return -errno;
 			}
-			d[0].type = SPA_DATA_DmaBuf;
+			if (d[0].type & (1u<<SPA_DATA_DmaBuf))
+				d[0].type = SPA_DATA_DmaBuf;
+			else
+				d[0].type = SPA_DATA_MemFd;
 			d[0].flags = SPA_DATA_FLAG_READABLE;
 			d[0].fd = expbuf.fd;
 			d[0].data = NULL;

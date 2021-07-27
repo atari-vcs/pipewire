@@ -386,8 +386,7 @@ static int impl_node_set_io(void *object, uint32_t id, void *data, size_t size)
 		memid = SPA_ID_INVALID;
 		mem_offset = mem_size = 0;
 	}
-	if (old != NULL)
-		pw_memmap_free(old);
+	pw_memmap_free(old);
 
 	if (this->resource == NULL)
 		return data == NULL ? 0 : -EIO;
@@ -497,8 +496,7 @@ do_update_port(struct node *this,
 	}
 
 	if (change_mask & PW_CLIENT_NODE_PORT_UPDATE_INFO) {
-		if (port->properties)
-			pw_properties_free(port->properties);
+		pw_properties_free(port->properties);
 		port->properties = NULL;
 		port->info.props = NULL;
 		port->info.n_params = 0;
@@ -707,8 +705,7 @@ static int do_port_set_io(struct impl *impl,
 		memid = SPA_ID_INVALID;
 		mem_offset = mem_size = 0;
 	}
-	if (old != NULL)
-		pw_memmap_free(old);
+	pw_memmap_free(old);
 
 	if (this->resource == NULL)
 		return data == NULL ? 0 : -EIO;
@@ -1101,7 +1098,7 @@ static int client_node_port_buffers(void *data,
 	return 0;
 }
 
-static struct pw_client_node_methods client_node_methods = {
+static const struct pw_client_node_methods client_node_methods = {
 	PW_VERSION_CLIENT_NODE_METHODS,
 	.get_node = client_node_get_node,
 	.update = client_node_update,
@@ -1764,8 +1761,7 @@ error_exit_free:
 error_exit_cleanup:
 	if (resource)
 		pw_resource_destroy(resource);
-	if (properties)
-		pw_properties_free(properties);
+	pw_properties_free(properties);
 	errno = -res;
 	return NULL;
 }

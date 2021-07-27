@@ -26,12 +26,14 @@
 #include <unistd.h>
 
 #include <pipewire/pipewire.h>
-#include <extensions/session-manager.h>
+#include <pipewire/extensions/session-manager.h>
 
 #include <spa/utils/string.h>
 #include <spa/pod/builder.h>
 #include <spa/pod/parser.h>
 #include <spa/pod/filter.h>
+
+#include <valgrind/valgrind.h>
 
 struct props
 {
@@ -452,6 +454,12 @@ static void test_endpoint(void)
 
 int main(int argc, char *argv[])
 {
+	/* FIXME: This test has a leak and a use of uninitialized buffer
+	 * that needs to be debugged and fixed (or excluded). Meanwhile -
+	 * skip it from valgrind so we can at least use the others. */
+	if (RUNNING_ON_VALGRIND)
+		return 77;
+
 	pw_init(&argc, &argv);
 
 	alarm(5); /* watchdog; terminate after 5 seconds */

@@ -1,3 +1,34 @@
+pipewire (0.3.32-1) experimental; urgency=medium
+
+  * Team upload.
+  * New upstream release
+  * Update symbols file
+
+ -- Dylan Aïssi <daissi@debian.org>  Wed, 21 Jul 2021 12:14:03 +0200
+
+pipewire (0.3.31-1) experimental; urgency=medium
+
+  * Team upload.
+  * New upstream release
+  * Add libusb-1.0-0-dev to Build-Depends
+  * Disable roc module at least for now
+  * Install bluez-hardware.conf in pipewire-media-session
+  * Update symbols file
+
+ -- Dylan Aïssi <daissi@debian.org>  Tue, 29 Jun 2021 12:09:29 +0200
+
+pipewire (0.3.30-1) experimental; urgency=medium
+
+  * Team upload.
+  * New upstream release
+  * Remove d/p/Let-pipewire-pulse-services-conflict-with-their-pulseaudi.patch,
+      applied upstream.
+  * Add libwebrtc-audio-processing-dev to Build-Depends
+  * Update symbols file
+  * Remove unused lintian override in pipewire-audio-client-libraries
+
+ -- Dylan Aïssi <daissi@debian.org>  Wed, 16 Jun 2021 12:07:16 +0200
+
 pipewire (0.3.28-1+apertis2) apertis; urgency=medium
 
   * d/patches: Fix flatpak support

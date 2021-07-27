@@ -128,6 +128,7 @@ struct impl {
 static void emit_node_info(struct impl *this, bool full)
 {
 	uint32_t i;
+	uint64_t old = full ? this->info.change_mask : 0;
 
 	if (this->add_listener)
 		return;
@@ -144,7 +145,7 @@ static void emit_node_info(struct impl *this, bool full)
 			}
 		}
 		spa_node_emit_info(&this->hooks, &this->info);
-		this->info.change_mask = 0;
+		this->info.change_mask = old;
 	}
 }
 
@@ -556,6 +557,7 @@ static int impl_node_set_io(void *object, uint32_t id, void *data, size_t size)
 	switch (id) {
 	case SPA_IO_Position:
 		res = spa_node_set_io(this->resample, id, data, size);
+		res = spa_node_set_io(this->channelmix, id, data, size);
 		res = spa_node_set_io(this->fmt[0], id, data, size);
 		res = spa_node_set_io(this->fmt[1], id, data, size);
 		break;
@@ -582,12 +584,14 @@ static void fmt_input_port_info(void *data,
 	if (this->fmt_removing[direction])
 		info = NULL;
 
+	spa_log_debug(this->log, "%p: %d.%d info", this, direction, port);
+
 	if (direction == SPA_DIRECTION_INPUT ||
 	    IS_MONITOR_PORT(this, direction, port))
 		spa_node_emit_port_info(&this->hooks, direction, port, info);
 }
 
-static struct spa_node_events fmt_input_events = {
+static const struct spa_node_events fmt_input_events = {
 	SPA_VERSION_NODE_EVENTS,
 	.port_info = fmt_input_port_info,
 	.result = on_node_result,
@@ -602,11 +606,13 @@ static void fmt_output_port_info(void *data,
 	if (this->fmt_removing[direction])
 		info = NULL;
 
+	spa_log_debug(this->log, "%p: %d.%d info", this, direction, port);
+
 	if (direction == SPA_DIRECTION_OUTPUT)
 		spa_node_emit_port_info(&this->hooks, direction, port, info);
 }
 
-static struct spa_node_events fmt_output_events = {
+static const struct spa_node_events fmt_output_events = {
 	SPA_VERSION_NODE_EVENTS,
 	.port_info = fmt_output_port_info,
 	.result = on_node_result,
@@ -649,13 +655,13 @@ static void on_channelmix_info(void *data, const struct spa_node_info *info)
 	emit_node_info(this, false);
 }
 
-static struct spa_node_events channelmix_events = {
+static const struct spa_node_events channelmix_events = {
 	SPA_VERSION_NODE_EVENTS,
 	.info = on_channelmix_info,
 	.result = on_node_result,
 };
 
-static struct spa_node_events resample_events = {
+static const struct spa_node_events resample_events = {
 	SPA_VERSION_NODE_EVENTS,
 	.result = on_node_result,
 };
@@ -1040,15 +1046,29 @@ impl_node_port_set_param(void *object,
 	spa_log_debug(this->log, NAME " %p: set param %u on port %d:%d %p",
 				this, id, direction, port_id, param);
 
-	is_monitor = IS_MONITOR_PORT(this, direction, port_id);
-	if (is_monitor)
-		target = this->fmt[SPA_DIRECTION_INPUT];
-	else
-		target = this->fmt[direction];
+	switch (id) {
+	default:
+		is_monitor = IS_MONITOR_PORT(this, direction, port_id);
+		if (is_monitor)
+			target = this->fmt[SPA_DIRECTION_INPUT];
+		else
+			target = this->fmt[direction];
+		break;
+	}
 
 	if ((res = spa_node_port_set_param(target,
 					direction, port_id, id, flags, param)) < 0)
 		return res;
+
+	switch (id) {
+	case SPA_PARAM_Latency:
+		target = this->fmt[SPA_DIRECTION_REVERSE(direction)];
+		port_id = 0;
+		if ((res = spa_node_port_set_param(target,
+					direction, port_id, id, flags, param)) < 0)
+			return res;
+		break;
+	}
 
 	return res;
 }
