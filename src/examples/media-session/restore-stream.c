@@ -41,7 +41,7 @@
 #include <spa/debug/pod.h>
 
 #include "pipewire/pipewire.h"
-#include "extensions/metadata.h"
+#include "pipewire/extensions/metadata.h"
 
 #include "media-session.h"
 
@@ -408,18 +408,19 @@ static int save_stream(struct stream *str)
 
 static void update_stream(struct stream *str)
 {
-	struct impl *impl = str->impl;
-	uint32_t i;
-	const char *p;
-	char *key;
-	struct sm_object *obj = &str->obj->obj;
-	const char *keys[] = {
+	static const char * const keys[] = {
 		PW_KEY_MEDIA_ROLE,
 		PW_KEY_APP_ID,
 		PW_KEY_APP_NAME,
 		PW_KEY_MEDIA_NAME,
 		PW_KEY_NODE_NAME,
 	};
+
+	struct impl *impl = str->impl;
+	uint32_t i;
+	const char *p;
+	char *key;
+	struct sm_object *obj = &str->obj->obj;
 
 	key = NULL;
 	for (i = 0; i < SPA_N_ELEMENTS(keys); i++) {
@@ -557,8 +558,7 @@ int sm_restore_stream_start(struct sm_media_session *session)
 
 exit_errno:
 	res = -errno;
-	if (impl->props)
-		pw_properties_free(impl->props);
+	pw_properties_free(impl->props);
 	free(impl);
 	return res;
 }

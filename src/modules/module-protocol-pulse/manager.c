@@ -28,7 +28,7 @@
 #include <spa/pod/parser.h>
 #include <spa/utils/result.h>
 #include <spa/utils/string.h>
-#include <extensions/metadata.h>
+#include <pipewire/extensions/metadata.h>
 
 #define MAX_PARAMS 32
 
@@ -194,8 +194,7 @@ static void object_destroy(struct object *o)
 	m->this.n_objects--;
 	if (o->this.proxy)
 		pw_proxy_destroy(o->this.proxy);
-	if (o->this.props)
-		pw_properties_free(o->this.props);
+	pw_properties_free(o->this.props);
 	if (o->this.message_object_path)
 		free(o->this.message_object_path);
 	clear_params(&o->this.param_list, SPA_ID_INVALID);
@@ -376,10 +375,10 @@ static void device_event_param(void *object, int seq,
 		return;
 
 	if (id == SPA_PARAM_Route && !has_param(&o->this.param_list, p)) {
-		uint32_t id, device;
+		uint32_t idx, device;
 		if (spa_pod_parse_object(param,
 				SPA_TYPE_OBJECT_ParamRoute, NULL,
-				SPA_PARAM_ROUTE_index, SPA_POD_Int(&id),
+				SPA_PARAM_ROUTE_index, SPA_POD_Int(&idx),
 				SPA_PARAM_ROUTE_device,  SPA_POD_Int(&device)) < 0)
 			return;
 

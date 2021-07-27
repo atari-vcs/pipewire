@@ -15,8 +15,6 @@ pipewire_dummy_sources = [
 ]
 
 pipewire_jack_c_args = [
-  '-DHAVE_CONFIG_H',
-  '-D_GNU_SOURCE',
   '-DPIC',
 ]
 
@@ -42,7 +40,7 @@ pipewire_jack = shared_library('jack',
     version : libversion,
     c_args : pipewire_jack_c_args,
     include_directories : [configinc, jack_inc],
-    dependencies : [pipewire_dep, atomic_dep, mathlib],
+    dependencies : [pipewire_dep, mathlib],
     install : true,
     install_dir : libjack_path,
 )
@@ -53,7 +51,7 @@ pipewire_jackserver = shared_library('jackserver',
     version : libversion,
     c_args : pipewire_jack_c_args,
     include_directories : [configinc, jack_inc],
-    dependencies : [pipewire_dep, atomic_dep, mathlib],
+    dependencies : [pipewire_dep, mathlib],
     install : true,
     install_dir : libjack_path,
 )
@@ -82,7 +80,6 @@ endif
 if sdl_dep.found()
   executable('video-dsp-play',
     '../examples/video-dsp-play.c',
-    c_args : [ '-D_GNU_SOURCE' ],
     include_directories : [jack_inc],
     install : installed_tests_enabled,
     install_dir : installed_tests_execdir / 'examples' / 'jack',

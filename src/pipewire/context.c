@@ -41,14 +41,12 @@
 
 #include <pipewire/impl.h>
 #include <pipewire/private.h>
+#include <pipewire/thread.h>
 #include <pipewire/conf.h>
 
-#include <extensions/protocol-native.h>
+#include <pipewire/extensions/protocol-native.h>
 
 #define NAME "context"
-
-#define CLOCK_MIN_QUANTUM			4u
-#define CLOCK_MAX_QUANTUM			8192u
 
 #define DEFAULT_CLOCK_RATE			48000u
 #define DEFAULT_CLOCK_QUANTUM			1024u
@@ -76,6 +74,7 @@ struct factory_entry {
 	regex_t regex;
 	char *lib;
 };
+/** \endcond */
 
 static void fill_properties(struct pw_context *context)
 {
@@ -140,26 +139,30 @@ static bool get_default_bool(struct pw_properties *properties, const char *name,
 static void fill_defaults(struct pw_context *this)
 {
 	struct pw_properties *p = this->properties;
-	this->defaults.clock_power_of_two_quantum = get_default_bool(p, "clock.power-of-two-quantum",
-			DEFAULT_CLOCK_POWER_OF_TWO_QUANTUM);
-	this->defaults.clock_rate = get_default_int(p, "default.clock.rate", DEFAULT_CLOCK_RATE);
-	this->defaults.clock_quantum = get_default_int(p, "default.clock.quantum", DEFAULT_CLOCK_QUANTUM);
-	this->defaults.clock_min_quantum = get_default_int(p, "default.clock.min-quantum", DEFAULT_CLOCK_MIN_QUANTUM);
-	this->defaults.clock_max_quantum = get_default_int(p, "default.clock.max-quantum", DEFAULT_CLOCK_MAX_QUANTUM);
-	this->defaults.video_size.width = get_default_int(p, "default.video.width", DEFAULT_VIDEO_WIDTH);
-	this->defaults.video_size.height = get_default_int(p, "default.video.height", DEFAULT_VIDEO_HEIGHT);
-	this->defaults.video_rate.num = get_default_int(p, "default.video.rate.num", DEFAULT_VIDEO_RATE_NUM);
-	this->defaults.video_rate.denom = get_default_int(p, "default.video.rate.denom", DEFAULT_VIDEO_RATE_DENOM);
-	this->defaults.link_max_buffers = get_default_int(p, "link.max-buffers", DEFAULT_LINK_MAX_BUFFERS);
-	this->defaults.mem_warn_mlock = get_default_bool(p, "mem.warn-mlock", DEFAULT_MEM_WARN_MLOCK);
-	this->defaults.mem_allow_mlock = get_default_bool(p, "mem.allow-mlock", DEFAULT_MEM_ALLOW_MLOCK);
+	struct settings *d = &this->defaults;
 
-	this->defaults.clock_max_quantum = SPA_CLAMP(this->defaults.clock_max_quantum,
+	d->clock_rate = get_default_int(p, "default.clock.rate", DEFAULT_CLOCK_RATE);
+	d->clock_quantum = get_default_int(p, "default.clock.quantum", DEFAULT_CLOCK_QUANTUM);
+	d->clock_min_quantum = get_default_int(p, "default.clock.min-quantum", DEFAULT_CLOCK_MIN_QUANTUM);
+	d->clock_max_quantum = get_default_int(p, "default.clock.max-quantum", DEFAULT_CLOCK_MAX_QUANTUM);
+	d->video_size.width = get_default_int(p, "default.video.width", DEFAULT_VIDEO_WIDTH);
+	d->video_size.height = get_default_int(p, "default.video.height", DEFAULT_VIDEO_HEIGHT);
+	d->video_rate.num = get_default_int(p, "default.video.rate.num", DEFAULT_VIDEO_RATE_NUM);
+	d->video_rate.denom = get_default_int(p, "default.video.rate.denom", DEFAULT_VIDEO_RATE_DENOM);
+
+	d->log_level = get_default_int(p, "log.level", pw_log_level);
+	d->clock_power_of_two_quantum = get_default_bool(p, "clock.power-of-two-quantum",
+			DEFAULT_CLOCK_POWER_OF_TWO_QUANTUM);
+	d->link_max_buffers = get_default_int(p, "link.max-buffers", DEFAULT_LINK_MAX_BUFFERS);
+	d->mem_warn_mlock = get_default_bool(p, "mem.warn-mlock", DEFAULT_MEM_WARN_MLOCK);
+	d->mem_allow_mlock = get_default_bool(p, "mem.allow-mlock", DEFAULT_MEM_ALLOW_MLOCK);
+
+	d->clock_max_quantum = SPA_CLAMP(d->clock_max_quantum,
 			CLOCK_MIN_QUANTUM, CLOCK_MAX_QUANTUM);
-	this->defaults.clock_min_quantum = SPA_CLAMP(this->defaults.clock_min_quantum,
-			CLOCK_MIN_QUANTUM, this->defaults.clock_max_quantum);
-	this->defaults.clock_quantum = SPA_CLAMP(this->defaults.clock_quantum,
-			this->defaults.clock_min_quantum, this->defaults.clock_max_quantum);
+	d->clock_min_quantum = SPA_CLAMP(d->clock_min_quantum,
+			CLOCK_MIN_QUANTUM, d->clock_max_quantum);
+	d->clock_quantum = SPA_CLAMP(d->clock_quantum,
+			d->clock_min_quantum, d->clock_max_quantum);
 }
 
 static int try_load_conf(struct pw_context *this, const char *conf_prefix,
@@ -172,22 +175,45 @@ static int try_load_conf(struct pw_context *this, const char *conf_prefix,
 	if (spa_streq(conf_name, "null"))
 		return 0;
 	if ((res = pw_conf_load_conf(conf_prefix, conf_name, conf)) < 0) {
+		bool skip_prefix = conf_prefix == NULL || conf_name[0] == '/';
 		pw_log_warn(NAME" %p: can't load config %s%s%s: %s",
 				this,
-				conf_prefix ? conf_prefix : "",
-				conf_prefix ? "/" : "",
+				skip_prefix ? "" : conf_prefix,
+				skip_prefix ? "" : "/",
 				conf_name, spa_strerror(res));
 	}
 	return res;
 }
+
+static int context_set_freewheel(struct pw_context *context, bool freewheel)
+{
+	struct spa_thread *thr;
+	int res;
+
+	if ((thr = pw_data_loop_get_thread(context->data_loop_impl)) == NULL)
+		return -EIO;
+
+	if (freewheel) {
+		pw_log_info(NAME" %p: enter freewheel", context);
+		res = pw_thread_utils_drop_rt(thr);
+	} else {
+		pw_log_info(NAME" %p: exit freewheel", context);
+		res = pw_thread_utils_acquire_rt(thr, 88);
+	}
+	if (res < 0)
+		pw_log_info(NAME" %p: freewheel error:%s", context, spa_strerror(res));
+
+	context->freewheeling = freewheel;
+
+	return res;
+}
+
 
 /** Create a new context object
  *
  * \param main_loop the main loop to use
  * \param properties extra properties for the context, ownership it taken
  * \return a newly allocated context object
- *
- * \memberof pw_context
  */
 SPA_EXPORT
 struct pw_context *pw_context_new(struct pw_loop *main_loop,
@@ -199,7 +225,7 @@ struct pw_context *pw_context_new(struct pw_loop *main_loop,
 	const char *lib, *str, *conf_prefix, *conf_name;
 	void *dbus_iface = NULL;
 	uint32_t n_support;
-	struct pw_properties *pr, *conf = NULL;
+	struct pw_properties *pr, *conf;
 	struct spa_cpu *cpu;
 	int res = 0;
 
@@ -216,18 +242,45 @@ struct pw_context *pw_context_new(struct pw_loop *main_loop,
 	if (user_data_size > 0)
 		this->user_data = SPA_PTROFF(impl, sizeof(struct impl), void);
 
+	pw_array_init(&this->factory_lib, 32);
+	pw_array_init(&this->objects, 32);
+	pw_map_init(&this->globals, 128, 32);
+
+	spa_list_init(&this->core_impl_list);
+	spa_list_init(&this->protocol_list);
+	spa_list_init(&this->core_list);
+	spa_list_init(&this->registry_resource_list);
+	spa_list_init(&this->global_list);
+	spa_list_init(&this->module_list);
+	spa_list_init(&this->device_list);
+	spa_list_init(&this->client_list);
+	spa_list_init(&this->node_list);
+	spa_list_init(&this->factory_list);
+	spa_list_init(&this->metadata_list);
+	spa_list_init(&this->link_list);
+	spa_list_init(&this->control_list[0]);
+	spa_list_init(&this->control_list[1]);
+	spa_list_init(&this->export_list);
+	spa_list_init(&this->driver_list);
+	spa_hook_list_init(&this->listener_list);
+	spa_hook_list_init(&this->driver_listener_list);
+
+	this->sc_pagesize = sysconf(_SC_PAGESIZE);
+
 	if (properties == NULL)
 		properties = pw_properties_new(NULL, NULL);
 	if (properties == NULL) {
 		res = -errno;
 		goto error_free;
 	}
+	this->properties = properties;
 
 	conf = pw_properties_new(NULL, NULL);
 	if (conf == NULL) {
 		res = -errno;
 		goto error_free;
 	}
+	this->conf = conf;
 
 	conf_prefix = getenv("PIPEWIRE_CONFIG_PREFIX");
 	if (conf_prefix == NULL)
@@ -238,14 +291,13 @@ struct pw_context *pw_context_new(struct pw_loop *main_loop,
 		conf_name = pw_properties_get(properties, PW_KEY_CONFIG_NAME);
 		if (try_load_conf(this, conf_prefix, conf_name, conf) < 0) {
 			conf_name = "client.conf";
-			if (try_load_conf(this, conf_prefix, conf_name, conf) < 0) {
+			if ((res = try_load_conf(this, conf_prefix, conf_name, conf)) < 0) {
 				pw_log_error(NAME" %p: can't load config %s: %s",
 					this, conf_name, spa_strerror(res));
 				goto error_free;
 			}
 		}
 	}
-	this->conf = conf;
 
 	n_support = pw_get_support(this->support, SPA_N_ELEMENTS(this->support) - 6);
 	cpu = spa_support_find(this->support, n_support, SPA_TYPE_INTERFACE_CPU);
@@ -253,6 +305,11 @@ struct pw_context *pw_context_new(struct pw_loop *main_loop,
 	if ((str = pw_properties_get(conf, "context.properties")) != NULL) {
 		pw_properties_update_string(properties, str, strlen(str));
 		pw_log_info(NAME" %p: parsed context.properties section", this);
+	}
+
+	if ((str = getenv("PIPEWIRE_CORE"))) {
+		pw_log_info("using core.name from environment: %s", str);
+		pw_properties_set(properties, PW_KEY_CORE_NAME, str);
 	}
 
 	if ((str = pw_properties_get(properties, "vm.overrides")) != NULL) {
@@ -275,9 +332,9 @@ struct pw_context *pw_context_new(struct pw_loop *main_loop,
 		else
 			pw_log_info(NAME" %p: mlockall succeeded", impl);
 	}
-	this->properties = properties;
 
 	fill_defaults(this);
+	this->settings = this->defaults;
 
 	pr = pw_properties_copy(properties);
 	if ((str = pw_properties_get(pr, "context.data-loop." PW_KEY_LIBRARY_NAME_SYSTEM)))
@@ -293,7 +350,7 @@ struct pw_context *pw_context_new(struct pw_loop *main_loop,
 	this->pool = pw_mempool_new(NULL);
 	if (this->pool == NULL) {
 		res = -errno;
-		goto error_free_loop;
+		goto error_free;
 	}
 
 	this->data_loop = pw_data_loop_get_loop(this->data_loop_impl);
@@ -326,68 +383,45 @@ struct pw_context *pw_context_new(struct pw_loop *main_loop,
 	}
 	this->n_support = n_support;
 
-	pw_array_init(&this->factory_lib, 32);
-	pw_array_init(&this->objects, 32);
-	pw_map_init(&this->globals, 128, 32);
-
-	spa_list_init(&this->core_impl_list);
-	spa_list_init(&this->protocol_list);
-	spa_list_init(&this->core_list);
-	spa_list_init(&this->registry_resource_list);
-	spa_list_init(&this->global_list);
-	spa_list_init(&this->module_list);
-	spa_list_init(&this->device_list);
-	spa_list_init(&this->client_list);
-	spa_list_init(&this->node_list);
-	spa_list_init(&this->factory_list);
-	spa_list_init(&this->link_list);
-	spa_list_init(&this->control_list[0]);
-	spa_list_init(&this->control_list[1]);
-	spa_list_init(&this->export_list);
-	spa_list_init(&this->driver_list);
-	spa_hook_list_init(&this->listener_list);
-	spa_hook_list_init(&this->driver_listener_list);
-
 	this->core = pw_context_create_core(this, pw_properties_copy(properties), 0);
 	if (this->core == NULL) {
 		res = -errno;
-		goto error_free_loop;
+		goto error_free;
 	}
 	pw_impl_core_register(this->core, NULL);
 
 	fill_properties(this);
 
-	if ((res = pw_data_loop_start(this->data_loop_impl)) < 0)
-		goto error_free_loop;
-
-	this->sc_pagesize = sysconf(_SC_PAGESIZE);
-
 	if ((res = pw_context_parse_conf_section(this, conf, "context.spa-libs")) < 0)
-		goto error_free_loop;
+		goto error_free;
 	pw_log_info(NAME" %p: parsed %d context.spa-libs items", this, res);
 	if ((res = pw_context_parse_conf_section(this, conf, "context.modules")) < 0)
-		goto error_free_loop;
-	pw_log_info(NAME" %p: parsed %d context.modules items", this, res);
+		goto error_free;
+	if (res > 0)
+		pw_log_info(NAME" %p: parsed %d context.modules items", this, res);
+	else
+		pw_log_warn(NAME "%p: no modules loaded from context.modules", this);
 	if ((res = pw_context_parse_conf_section(this, conf, "context.objects")) < 0)
-		goto error_free_loop;
+		goto error_free;
 	pw_log_info(NAME" %p: parsed %d context.objects items", this, res);
 	if ((res = pw_context_parse_conf_section(this, conf, "context.exec")) < 0)
-		goto error_free_loop;
+		goto error_free;
 	pw_log_info(NAME" %p: parsed %d context.exec items", this, res);
+
+	if ((res = pw_data_loop_start(this->data_loop_impl)) < 0)
+		goto error_free;
+
+	context_set_freewheel(this, false);
+
+	pw_settings_init(this);
 
 	pw_log_debug(NAME" %p: created", this);
 
 	return this;
 
-error_free_loop:
-	pw_data_loop_destroy(this->data_loop_impl);
 error_free:
-	free(this);
+	pw_context_destroy(this);
 error_cleanup:
-	if (conf)
-		pw_properties_free(conf);
-	if (properties)
-		pw_properties_free(properties);
 	errno = -res;
 	return NULL;
 }
@@ -395,8 +429,6 @@ error_cleanup:
 /** Destroy a context object
  *
  * \param context a context to destroy
- *
- * \memberof pw_context
  */
 SPA_EXPORT
 void pw_context_destroy(struct pw_context *context)
@@ -410,6 +442,7 @@ void pw_context_destroy(struct pw_context *context)
 	struct pw_resource *resource;
 	struct pw_impl_node *node;
 	struct factory_entry *entry;
+	struct pw_impl_metadata *metadata;
 	struct pw_impl_core *core_impl;
 
 	pw_log_debug(NAME" %p: destroy", context);
@@ -430,11 +463,17 @@ void pw_context_destroy(struct pw_context *context)
 	spa_list_consume(resource, &context->registry_resource_list, link)
 		pw_resource_destroy(resource);
 
+	if (context->data_loop_impl)
+		pw_data_loop_destroy(context->data_loop_impl);
+
 	spa_list_consume(module, &context->module_list, link)
 		pw_impl_module_destroy(module);
 
 	spa_list_consume(global, &context->global_list, link)
 		pw_global_destroy(global);
+
+	spa_list_consume(metadata, &context->metadata_list, link)
+		pw_impl_metadata_destroy(metadata);
 
 	spa_list_consume(core_impl, &context->core_impl_list, link)
 		pw_impl_core_destroy(core_impl);
@@ -442,15 +481,16 @@ void pw_context_destroy(struct pw_context *context)
 	pw_log_debug(NAME" %p: free", context);
 	pw_context_emit_free(context);
 
-	pw_mempool_destroy(context->pool);
-
-	pw_data_loop_destroy(context->data_loop_impl);
+	if (context->pool)
+		pw_mempool_destroy(context->pool);
 
 	if (context->work_queue)
 		pw_work_queue_destroy(context->work_queue);
 
 	pw_properties_free(context->properties);
 	pw_properties_free(context->conf);
+
+	pw_settings_clean(context);
 
 	if (impl->dbus_handle)
 		pw_unload_spa_handle(impl->dbus_handle);
@@ -525,8 +565,6 @@ const char *pw_context_get_conf_section(struct pw_context *context, const char *
  * \param dict properties to update
  *
  * Update the context object with the given properties
- *
- * \memberof pw_context
  */
 SPA_EXPORT
 int pw_context_update_properties(struct pw_context *context, const struct spa_dict *dict)
@@ -592,8 +630,6 @@ struct pw_global *pw_context_find_global(struct pw_context *context, uint32_t id
  * \param format_filters array of format filters
  * \param[out] error an error when something is wrong
  * \return a port that can be used to link to \a otherport or NULL on error
- *
- * \memberof pw_context
  */
 struct pw_impl_port *pw_context_find_port(struct pw_context *context,
 				  struct pw_impl_port *other_port,
@@ -723,13 +759,13 @@ SPA_PRINTF_FUNC(7, 8) int pw_context_debug_port_params(struct pw_context *this,
  * \param props extra properties
  * \param n_format_filters number of format filters
  * \param format_filters array of format filters
+ * \param[out] format the common format between the ports
+ * \param builder builder to use for processing
  * \param[out] error an error when something is wrong
  * \return a common format of NULL on error
  *
  * Find a common format between the given ports. The format will
  * be restricted to a subset given with the format filters.
- *
- * \memberof pw_context
  */
 int pw_context_find_format(struct pw_context *context,
 			struct pw_impl_port *output,
@@ -956,10 +992,25 @@ static int collect_nodes(struct pw_context *context, struct pw_impl_node *driver
 	return 0;
 }
 
+static inline void get_quantums(struct pw_context *context, uint32_t *def, uint32_t *min, uint32_t *max)
+{
+	struct settings *s = &context->settings;
+	*def = s->clock_force_quantum == 0 ? s->clock_quantum : s->clock_force_quantum;
+	*min = s->clock_force_quantum == 0 ? s->clock_min_quantum : s->clock_force_quantum;
+	*max = s->clock_force_quantum == 0 ? s->clock_max_quantum : s->clock_force_quantum;
+}
+static inline void get_rate(struct pw_context *context, uint32_t *def)
+{
+	struct settings *s = &context->settings;
+	*def = s->clock_force_rate == 0 ? s->clock_rate : s->clock_force_rate;
+}
+
 int pw_context_recalc_graph(struct pw_context *context, const char *reason)
 {
 	struct impl *impl = SPA_CONTAINER_OF(context, struct impl, this);
 	struct pw_impl_node *n, *s, *target, *fallback;
+	uint32_t max_quantum, min_quantum, def_quantum, def_rate;
+	bool freewheel = false;
 
 	pw_log_info(NAME" %p: busy:%d reason:%s", context, impl->recalc, reason);
 
@@ -970,6 +1021,9 @@ int pw_context_recalc_graph(struct pw_context *context, const char *reason)
 
 again:
 	impl->recalc = true;
+
+	get_quantums(context, &def_quantum, &min_quantum, &max_quantum);
+	get_rate(context, &def_rate);
 
 	/* start from all drivers and group all nodes that are linked
 	 * to it. Some nodes are not (yet) linked to anything and they
@@ -1004,6 +1058,8 @@ again:
 				 * is a target for our unassigned nodes */
 				if (target == NULL)
 					target = n;
+				if (n->freewheel)
+					freewheel = true;
 				break;
 			}
 		}
@@ -1011,6 +1067,10 @@ again:
 	/* no active node, use fallback driving node */
 	if (target == NULL)
 		target = fallback;
+
+	/* update the freewheel status */
+	if (context->freewheeling != freewheel)
+		context_set_freewheel(context, freewheel);
 
 	/* now go through all available nodes. The ones we didn't visit
 	 * in collect_nodes() are not linked to any driver. We assign them
@@ -1039,7 +1099,6 @@ again:
 	/* assign final quantum and set state for followers and drivers */
 	spa_list_for_each(n, &context->driver_list, driver_link) {
 		bool running = false;
-		uint32_t max_quantum = context->defaults.clock_max_quantum;
 		uint32_t quantum = 0;
 
 		if (!n->driving || n->exported)
@@ -1060,12 +1119,11 @@ again:
 				running = !n->passive;
 		}
 		if (quantum == 0)
-			quantum = context->defaults.clock_quantum;
+			quantum = def_quantum;
 
-		quantum = SPA_CLAMP(quantum,
-				context->defaults.clock_min_quantum,
-				max_quantum);
+		quantum = SPA_CLAMP(quantum, min_quantum, max_quantum);
 
+		n->rt.position->clock.rate = SPA_FRACTION(1, def_rate);
 		if (n->rt.position && quantum != n->rt.position->clock.duration) {
 			pw_log_info("(%s-%u) new quantum:%"PRIu64"->%u",
 					n->name, n->info.id,

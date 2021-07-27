@@ -130,6 +130,14 @@ static void remove_device(struct impl *this, struct device *device)
 	*device = this->devices[--this->n_devices];
 }
 
+static void clear_devices(struct impl *this)
+{
+        uint32_t i;
+	for (i = 0; i < this->n_devices; i++)
+	        udev_device_unref(this->devices[i].dev);
+	this->n_devices = 0;
+}
+
 static uint32_t get_device_id(struct impl *this, struct udev_device *dev)
 {
 	const char *str;
@@ -526,7 +534,7 @@ static int start_monitor(struct impl *this)
 
 	this->source.func = impl_on_fd_events;
 	this->source.data = this;
-	this->source.fd = udev_monitor_get_fd(this->umonitor);;
+	this->source.fd = udev_monitor_get_fd(this->umonitor);
 	this->source.mask = SPA_IO_IN | SPA_IO_ERR;
 
 	spa_log_debug(this->log, "monitor %p", this->umonitor);
@@ -542,6 +550,8 @@ static int stop_monitor(struct impl *this)
 {
 	if (this->umonitor == NULL)
 		return 0;
+
+	clear_devices (this);
 
 	spa_loop_remove_source(this->main_loop, &this->source);
 	udev_monitor_unref(this->umonitor);
@@ -589,12 +599,13 @@ static const struct spa_dict_item device_info_items[] = {
 
 static void emit_device_info(struct impl *this, bool full)
 {
+	uint64_t old = full ? this->info.change_mask : 0;
 	if (full)
 		this->info.change_mask = this->info_all;
 	if (this->info.change_mask) {
 		this->info.props = &SPA_DICT_INIT_ARRAY(device_info_items);
 		spa_device_emit_info(&this->hooks, &this->info);
-		this->info.change_mask = 0;
+		this->info.change_mask = old;
 	}
 }
 
