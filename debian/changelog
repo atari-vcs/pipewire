@@ -1,3 +1,13 @@
+pipewire (0.3.32-1+apertis2) apertis; urgency=medium
+
+  [ Frederic Danis ]
+  * Refresh the automatically detected licensing information
+
+  [ Frédéric Danis ]
+  * Fix AppArmor rules for AMD64 targets
+
+ -- Frédéric Danis <frederic.danis@collabora.com>  Thu, 05 Aug 2021 09:10:05 +0200
+
 pipewire (0.3.32-1+apertis1) apertis; urgency=medium
 
   * Sync updates from Debian Experimental
