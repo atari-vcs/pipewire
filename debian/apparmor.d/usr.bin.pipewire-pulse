@@ -26,6 +26,7 @@ profile /usr/bin/pipewire-pulse flags=(attach_disconnected) {
 
   /                                            r,
   /etc/pipewire/*.conf                         r,
+  /sys/devices/virtual/dmi/id/*                r,
   owner @{PROC}/*/stat                         r,
   owner @{PROC}/*/fd/                          r,
   owner @{PROC}/*/fd/*                         r,

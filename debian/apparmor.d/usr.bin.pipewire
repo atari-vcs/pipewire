@@ -21,6 +21,7 @@ profile /usr/bin/pipewire {
   /etc/pipewire/                               r,
   /etc/pipewire/*.conf                         r,
   /dev/video*                                  rw,
+  /sys/devices/virtual/dmi/id/*                r,
   owner @{PROC}/*/stat                         r,
   owner @{PROC}/*/fd/                          r,
   owner @{PROC}/*/fd/*                         r,
