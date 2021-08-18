@@ -27,14 +27,12 @@
 #define TEST_FUNC(a,b,func)	\
 do {				\
 	a.func = b.func;	\
-	spa_assert(SPA_PTRDIFF(&a.func, &a) == SPA_PTRDIFF(&b.func, &b)); \
+	spa_assert_se(SPA_PTRDIFF(&a.func, &a) == SPA_PTRDIFF(&b.func, &b)); \
 } while(0)
 
 static void test_core_abi(void)
 {
-	struct pw_core_methods m;
-	struct pw_core_events e;
-	struct {
+	static const struct {
 		uint32_t version;
 		int (*add_listener) (void *object,
 			struct spa_hook *listener,
@@ -54,7 +52,7 @@ static void test_core_abi(void)
 				       size_t user_data_size);
 		int (*destroy) (void *object, void *proxy);
 	} methods = { PW_VERSION_CORE_METHODS, };
-	struct {
+	static const struct {
 		uint32_t version;
 		void (*info) (void *object, const struct pw_core_info *info);
 		void (*done) (void *object, uint32_t id, int seq);
@@ -66,6 +64,9 @@ static void test_core_abi(void)
 		void (*remove_mem) (void *object, uint32_t id);
 	} events = { PW_VERSION_CORE_EVENTS, };
 
+	struct pw_core_events e;
+	struct pw_core_methods m;
+
 	TEST_FUNC(m, methods, version);
 	TEST_FUNC(m, methods, add_listener);
 	TEST_FUNC(m, methods, hello);
@@ -75,8 +76,8 @@ static void test_core_abi(void)
 	TEST_FUNC(m, methods, get_registry);
 	TEST_FUNC(m, methods, create_object);
 	TEST_FUNC(m, methods, destroy);
-	spa_assert(PW_VERSION_CORE_METHODS == 0);
-	spa_assert(sizeof(m) == sizeof(methods));
+	spa_assert_se(PW_VERSION_CORE_METHODS == 0);
+	spa_assert_se(sizeof(m) == sizeof(methods));
 
 	TEST_FUNC(e, events, version);
 	TEST_FUNC(e, events, info);
@@ -87,8 +88,8 @@ static void test_core_abi(void)
 	TEST_FUNC(e, events, bound_id);
 	TEST_FUNC(e, events, add_mem);
 	TEST_FUNC(e, events, remove_mem);
-	spa_assert(PW_VERSION_CORE_EVENTS == 0);
-	spa_assert(sizeof(e) == sizeof(events));
+	spa_assert_se(PW_VERSION_CORE_EVENTS == 0);
+	spa_assert_se(sizeof(e) == sizeof(events));
 }
 
 static void test_registry_abi(void)
@@ -117,14 +118,14 @@ static void test_registry_abi(void)
 	TEST_FUNC(m, methods, add_listener);
 	TEST_FUNC(m, methods, bind);
 	TEST_FUNC(m, methods, destroy);
-	spa_assert(PW_VERSION_REGISTRY_METHODS == 0);
-	spa_assert(sizeof(m) == sizeof(methods));
+	spa_assert_se(PW_VERSION_REGISTRY_METHODS == 0);
+	spa_assert_se(sizeof(m) == sizeof(methods));
 
 	TEST_FUNC(e, events, version);
 	TEST_FUNC(e, events, global);
 	TEST_FUNC(e, events, global_remove);
-	spa_assert(PW_VERSION_REGISTRY_EVENTS == 0);
-	spa_assert(sizeof(e) == sizeof(events));
+	spa_assert_se(PW_VERSION_REGISTRY_EVENTS == 0);
+	spa_assert_se(sizeof(e) == sizeof(events));
 }
 
 static void test_module_abi(void)
@@ -145,13 +146,13 @@ static void test_module_abi(void)
 
 	TEST_FUNC(m, methods, version);
 	TEST_FUNC(m, methods, add_listener);
-	spa_assert(PW_VERSION_MODULE_METHODS == 0);
-	spa_assert(sizeof(m) == sizeof(methods));
+	spa_assert_se(PW_VERSION_MODULE_METHODS == 0);
+	spa_assert_se(sizeof(m) == sizeof(methods));
 
 	TEST_FUNC(e, events, version);
 	TEST_FUNC(e, events, info);
-	spa_assert(PW_VERSION_MODULE_EVENTS == 0);
-	spa_assert(sizeof(e) == sizeof(events));
+	spa_assert_se(PW_VERSION_MODULE_EVENTS == 0);
+	spa_assert_se(sizeof(e) == sizeof(events));
 }
 
 static void test_device_abi(void)
@@ -184,14 +185,14 @@ static void test_device_abi(void)
 	TEST_FUNC(m, methods, subscribe_params);
 	TEST_FUNC(m, methods, enum_params);
 	TEST_FUNC(m, methods, set_param);
-	spa_assert(PW_VERSION_DEVICE_METHODS == 0);
-	spa_assert(sizeof(m) == sizeof(methods));
+	spa_assert_se(PW_VERSION_DEVICE_METHODS == 0);
+	spa_assert_se(sizeof(m) == sizeof(methods));
 
 	TEST_FUNC(e, events, version);
 	TEST_FUNC(e, events, info);
 	TEST_FUNC(e, events, param);
-	spa_assert(PW_VERSION_DEVICE_EVENTS == 0);
-	spa_assert(sizeof(e) == sizeof(events));
+	spa_assert_se(PW_VERSION_DEVICE_EVENTS == 0);
+	spa_assert_se(sizeof(e) == sizeof(events));
 }
 
 static void test_node_abi(void)
@@ -225,14 +226,14 @@ static void test_node_abi(void)
 	TEST_FUNC(m, methods, enum_params);
 	TEST_FUNC(m, methods, set_param);
 	TEST_FUNC(m, methods, send_command);
-	spa_assert(PW_VERSION_NODE_METHODS == 0);
-	spa_assert(sizeof(m) == sizeof(methods));
+	spa_assert_se(PW_VERSION_NODE_METHODS == 0);
+	spa_assert_se(sizeof(m) == sizeof(methods));
 
 	TEST_FUNC(e, events, version);
 	TEST_FUNC(e, events, info);
 	TEST_FUNC(e, events, param);
-	spa_assert(PW_VERSION_NODE_EVENTS == 0);
-	spa_assert(sizeof(e) == sizeof(events));
+	spa_assert_se(PW_VERSION_NODE_EVENTS == 0);
+	spa_assert_se(sizeof(e) == sizeof(events));
 }
 
 static void test_port_abi(void)
@@ -260,14 +261,14 @@ static void test_port_abi(void)
 	TEST_FUNC(m, methods, version);
 	TEST_FUNC(m, methods, add_listener);
 	TEST_FUNC(m, methods, enum_params);
-	spa_assert(PW_VERSION_PORT_METHODS == 0);
-	spa_assert(sizeof(m) == sizeof(methods));
+	spa_assert_se(PW_VERSION_PORT_METHODS == 0);
+	spa_assert_se(sizeof(m) == sizeof(methods));
 
 	TEST_FUNC(e, events, version);
 	TEST_FUNC(e, events, info);
 	TEST_FUNC(e, events, param);
-	spa_assert(PW_VERSION_PORT_EVENTS == 0);
-	spa_assert(sizeof(e) == sizeof(events));
+	spa_assert_se(PW_VERSION_PORT_EVENTS == 0);
+	spa_assert_se(sizeof(e) == sizeof(events));
 }
 
 static void test_factory_abi(void)
@@ -288,13 +289,13 @@ static void test_factory_abi(void)
 
 	TEST_FUNC(m, methods, version);
 	TEST_FUNC(m, methods, add_listener);
-	spa_assert(PW_VERSION_FACTORY_METHODS == 0);
-	spa_assert(sizeof(m) == sizeof(methods));
+	spa_assert_se(PW_VERSION_FACTORY_METHODS == 0);
+	spa_assert_se(sizeof(m) == sizeof(methods));
 
 	TEST_FUNC(e, events, version);
 	TEST_FUNC(e, events, info);
-	spa_assert(PW_VERSION_FACTORY_EVENTS == 0);
-	spa_assert(sizeof(e) == sizeof(events));
+	spa_assert_se(PW_VERSION_FACTORY_EVENTS == 0);
+	spa_assert_se(sizeof(e) == sizeof(events));
 }
 
 static void test_client_abi(void)
@@ -326,14 +327,14 @@ static void test_client_abi(void)
 	TEST_FUNC(m, methods, update_properties);
 	TEST_FUNC(m, methods, get_permissions);
 	TEST_FUNC(m, methods, update_permissions);
-	spa_assert(PW_VERSION_CLIENT_METHODS == 0);
-	spa_assert(sizeof(m) == sizeof(methods));
+	spa_assert_se(PW_VERSION_CLIENT_METHODS == 0);
+	spa_assert_se(sizeof(m) == sizeof(methods));
 
 	TEST_FUNC(e, events, version);
 	TEST_FUNC(e, events, info);
 	TEST_FUNC(e, events, permissions);
-	spa_assert(PW_VERSION_CLIENT_EVENTS == 0);
-	spa_assert(sizeof(e) == sizeof(events));
+	spa_assert_se(PW_VERSION_CLIENT_EVENTS == 0);
+	spa_assert_se(sizeof(e) == sizeof(events));
 }
 
 static void test_link_abi(void)
@@ -354,13 +355,13 @@ static void test_link_abi(void)
 
 	TEST_FUNC(m, methods, version);
 	TEST_FUNC(m, methods, add_listener);
-	spa_assert(PW_VERSION_LINK_METHODS == 0);
-	spa_assert(sizeof(m) == sizeof(methods));
+	spa_assert_se(PW_VERSION_LINK_METHODS == 0);
+	spa_assert_se(sizeof(m) == sizeof(methods));
 
 	TEST_FUNC(e, events, version);
 	TEST_FUNC(e, events, info);
-	spa_assert(PW_VERSION_LINK_EVENTS == 0);
-	spa_assert(sizeof(e) == sizeof(events));
+	spa_assert_se(PW_VERSION_LINK_EVENTS == 0);
+	spa_assert_se(sizeof(e) == sizeof(events));
 }
 
 int main(int argc, char *argv[])

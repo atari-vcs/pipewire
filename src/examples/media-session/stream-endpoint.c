@@ -33,14 +33,18 @@
 #include <spa/node/node.h>
 #include <spa/utils/hook.h>
 #include <spa/utils/result.h>
+#include <spa/utils/string.h>
 #include <spa/param/audio/format-utils.h>
 #include <spa/param/props.h>
 #include <spa/debug/pod.h>
 
 #include "pipewire/pipewire.h"
 
-#include "extensions/session-manager.h"
+#include "pipewire/extensions/session-manager.h"
 #include "media-session.h"
+
+/** \page page_media_session_module_stream_endpoint Media Session Module: Stream Endpoint
+ */
 
 #define NAME "stream-endpoint"
 #define SESSION_KEY	"stream-endpoint"
@@ -208,7 +212,7 @@ static int client_endpoint_create_link(void *object, const struct spa_dict *prop
 			goto exit;
 		}
 		obj = sm_media_session_find_object(impl->session, atoi(str));
-		if (obj == NULL || strcmp(obj->type, PW_TYPE_INTERFACE_Endpoint) != 0) {
+		if (obj == NULL || !spa_streq(obj->type, PW_TYPE_INTERFACE_Endpoint)) {
 			pw_log_warn(NAME" %p: could not find endpoint %s (%p)", impl, str, obj);
 			res = -EINVAL;
 			goto exit;
@@ -515,16 +519,16 @@ handle_node(struct impl *impl, struct sm_object *obj)
 	if (media_class == NULL)
 		return 0;
 
-	if (strstr(media_class, "Stream/") != media_class)
+	if (!spa_strstartswith(media_class, "Stream/"))
 		return 0;
 
 	media_class += strlen("Stream/");
 
-	if (strstr(media_class, "Output/") == media_class) {
+	if (spa_strstartswith(media_class, "Output/")) {
 		direction = PW_DIRECTION_OUTPUT;
 		media_class += strlen("Output/");
 	}
-	else if (strstr(media_class, "Input/") == media_class) {
+	else if (spa_strstartswith(media_class, "Input/")) {
 		direction = PW_DIRECTION_INPUT;
 		media_class += strlen("Input/");
 	}
@@ -559,7 +563,7 @@ static void session_create(void *data, struct sm_object *object)
 	struct impl *impl = data;
 	int res;
 
-	if (strcmp(object->type, PW_TYPE_INTERFACE_Node) == 0)
+	if (spa_streq(object->type, PW_TYPE_INTERFACE_Node))
 		res = handle_node(impl, object);
 	else
 		res = 0;
@@ -574,7 +578,7 @@ static void session_remove(void *data, struct sm_object *object)
 {
 	struct impl *impl = data;
 
-	if (strcmp(object->type, PW_TYPE_INTERFACE_Node) == 0) {
+	if (spa_streq(object->type, PW_TYPE_INTERFACE_Node)) {
 		struct node *node;
 		if ((node = sm_object_get_data(object, SESSION_KEY)) != NULL)
 			destroy_node(impl, node);

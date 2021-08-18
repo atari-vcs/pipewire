@@ -31,8 +31,17 @@ extern "C" {
 
 #include <stdarg.h>
 
+#include <spa/utils/type.h>
 #include <spa/utils/defs.h>
 #include <spa/utils/hook.h>
+
+/** \defgroup spa_log SPA Logging
+ */
+
+/**
+ * \addtogroup spa_log
+ * \{
+ */
 
 enum spa_log_level {
 	SPA_LOG_LEVEL_NONE = 0,
@@ -48,11 +57,11 @@ enum spa_log_level {
  */
 #define SPA_TYPE_INTERFACE_Log	SPA_TYPE_INFO_INTERFACE_BASE "Log"
 
-#define SPA_VERSION_LOG		0
 
 struct spa_log {
 	/** the version of this log. This can be used to expand this
 	 * structure in the future */
+#define SPA_VERSION_LOG		0
 	struct spa_interface iface;
 	/**
 	 * Logging level, everything above this level is not logged
@@ -165,6 +174,8 @@ static inline void spa_log_trace_fp (struct spa_log *l, const char *format, ...)
 
 #endif
 
+/** \fn spa_log_error */
+
 /** keys can be given when initializing the logger handle */
 #define SPA_KEY_LOG_LEVEL		"log.level"		/**< the default log level */
 #define SPA_KEY_LOG_COLORS		"log.colors"		/**< enable colors in the logger */
@@ -172,6 +183,10 @@ static inline void spa_log_trace_fp (struct spa_log *l, const char *format, ...)
 								  *  stderr. */
 #define SPA_KEY_LOG_TIMESTAMP		"log.timestamp"		/**< log timestamps */
 #define SPA_KEY_LOG_LINE		"log.line"		/**< log file and line numbers */
+
+/**
+ * \}
+ */
 
 #ifdef __cplusplus
 }  /* extern "C" */

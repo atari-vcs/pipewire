@@ -43,6 +43,11 @@
 #define SEQ_NAME "seq"
 #define SND_SEQ_PATH SND_PATH"/"SEQ_NAME
 
+/** \page page_media_session_module_alsa_midi Media Session Module: ALSA MIDI
+ */
+
+#define DEFAULT_NAME	"Midi-Bridge"
+
 struct impl {
 	struct sm_media_session *session;
 	struct spa_hook listener;
@@ -102,14 +107,14 @@ static void on_notify_events(void *data, int fd, uint32_t mask)
 		if (len <= 0)
 			break;
 
-		e = SPA_MEMBER(&buf, len, void);
+		e = SPA_PTROFF(&buf, len, void);
 
 		for (p = &buf; p < e;
-		p = SPA_MEMBER(p, sizeof(struct inotify_event) + event->len, void)) {
+		p = SPA_PTROFF(p, sizeof(struct inotify_event) + event->len, void)) {
 			event = (const struct inotify_event *) p;
 
 			if ((event->mask & IN_ATTRIB)) {
-				if (strcmp(event->name, SEQ_NAME) != 0)
+				if (strncmp(event->name, SEQ_NAME, event->len) != 0)
 					continue;
 				if (impl->proxy == NULL &&
 				    check_access(impl) &&
@@ -168,15 +173,19 @@ int sm_alsa_midi_start(struct sm_media_session *session)
 {
 	struct impl *impl;
 	int res;
+	const char *name;
 
 	impl = calloc(1, sizeof(struct impl));
 	if (impl == NULL)
 		return -errno;
 
+	if ((name = pw_properties_get(session->props, "alsa.seq.name")) == NULL)
+		name = DEFAULT_NAME;
+
 	impl->session = session;
 	impl->props = pw_properties_new(
 			SPA_KEY_FACTORY_NAME, SPA_NAME_API_ALSA_SEQ_BRIDGE,
-			SPA_KEY_NODE_NAME, "Midi-Bridge",
+			SPA_KEY_NODE_NAME, name,
 			NULL);
 	if (impl->props == NULL) {
 		res = -errno;

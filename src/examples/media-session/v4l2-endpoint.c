@@ -35,15 +35,19 @@
 #include <spa/utils/result.h>
 #include <spa/utils/names.h>
 #include <spa/utils/keys.h>
+#include <spa/utils/string.h>
 #include <spa/param/video/format-utils.h>
 #include <spa/param/props.h>
 #include <spa/debug/dict.h>
 #include <spa/debug/pod.h>
 
 #include "pipewire/pipewire.h"
-#include <extensions/session-manager.h>
+#include <pipewire/extensions/session-manager.h>
 
 #include "media-session.h"
+
+/** \page page_media_session_module_v4l2_endpoint Media Session Module: V4L2 Endpoint
+ */
 
 #define NAME		"v4l2-endpoint"
 #define SESSION_KEY	"v4l2-endpoint"
@@ -161,7 +165,7 @@ static int client_endpoint_create_link(void *object, const struct spa_dict *prop
 			goto exit;
 		}
 		obj = sm_media_session_find_object(impl->session, atoi(str));
-		if (obj == NULL || strcmp(obj->type, PW_TYPE_INTERFACE_Endpoint) != 0) {
+		if (obj == NULL || !spa_streq(obj->type, PW_TYPE_INTERFACE_Endpoint)) {
 			pw_log_warn(NAME" %p: could not find endpoint %s (%p)", impl, str, obj);
 			res = -EINVAL;
 			goto exit;
@@ -562,9 +566,9 @@ handle_device(struct impl *impl, struct sm_object *obj)
 
 	pw_log_debug(NAME" %p: device "PW_KEY_MEDIA_CLASS":%s api:%s", impl, media_class, str);
 
-	if (strstr(media_class, "Video/") != media_class)
+	if (!spa_strstartswith(media_class, "Video/"))
 		return 0;
-	if (strcmp(str, "v4l2") != 0)
+	if (!spa_streq(str, "v4l2"))
 		return 0;
 
 	device = sm_object_add_data(obj, SESSION_KEY, sizeof(struct device));
@@ -591,7 +595,7 @@ static void session_create(void *data, struct sm_object *object)
 	struct impl *impl = data;
 	int res;
 
-	if (strcmp(object->type, PW_TYPE_INTERFACE_Device) == 0)
+	if (spa_streq(object->type, PW_TYPE_INTERFACE_Device))
 		res = handle_device(impl, object);
 	else
 		res = 0;
@@ -606,7 +610,7 @@ static void session_remove(void *data, struct sm_object *object)
 {
 	struct impl *impl = data;
 
-	if (strcmp(object->type, PW_TYPE_INTERFACE_Device) == 0) {
+	if (spa_streq(object->type, PW_TYPE_INTERFACE_Device)) {
 		struct device *device;
 		if ((device = sm_object_get_data(object, SESSION_KEY)) != NULL)
 			destroy_device(impl, device);

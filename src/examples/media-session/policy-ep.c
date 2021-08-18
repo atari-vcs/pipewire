@@ -32,14 +32,18 @@
 
 #include <spa/node/node.h>
 #include <spa/utils/hook.h>
+#include <spa/utils/string.h>
 #include <spa/param/audio/format-utils.h>
 #include <spa/param/props.h>
 #include <spa/debug/pod.h>
 
 #include "pipewire/pipewire.h"
-#include "extensions/session-manager.h"
+#include "pipewire/extensions/session-manager.h"
 
 #include "media-session.h"
+
+/** \page page_media_session_module_policy_endpoint Media Session Module: Policy Endpoint
+ */
 
 #define NAME "policy-ep"
 #define SESSION_KEY	"policy-endpoint"
@@ -129,14 +133,14 @@ handle_endpoint(struct impl *impl, struct sm_object *object)
 	ep->enabled = true;
 	spa_list_append(&impl->endpoint_list, &ep->link);
 
-	if (strstr(media_class, "Stream/") == media_class) {
+	if (spa_strstartswith(media_class, "Stream/")) {
 		media_class += strlen("Stream/");
 
-		if (strstr(media_class, "Output/") == media_class) {
+		if (spa_strstartswith(media_class, "Output/")) {
 			direction = PW_DIRECTION_OUTPUT;
 			media_class += strlen("Output/");
 		}
-		else if (strstr(media_class, "Input/") == media_class) {
+		else if (spa_strstartswith(media_class, "Input/")) {
 			direction = PW_DIRECTION_INPUT;
 			media_class += strlen("Input/");
 		}
@@ -150,20 +154,20 @@ handle_endpoint(struct impl *impl, struct sm_object *object)
 	}
 	else {
 		const char *media;
-		if (strstr(media_class, "Audio/") == media_class) {
+		if (spa_strstartswith(media_class, "Audio/")) {
 			media_class += strlen("Audio/");
 			media = "Audio";
 		}
-		else if (strstr(media_class, "Video/") == media_class) {
+		else if (spa_strstartswith(media_class, "Video/")) {
 			media_class += strlen("Video/");
 			media = "Video";
 		}
 		else
 			return 0;
 
-		if (strcmp(media_class, "Sink") == 0)
+		if (spa_streq(media_class, "Sink"))
 			direction = PW_DIRECTION_INPUT;
-		else if (strcmp(media_class, "Source") == 0)
+		else if (spa_streq(media_class, "Source"))
 			direction = PW_DIRECTION_OUTPUT;
 		else
 			return 0;
@@ -218,9 +222,9 @@ static void session_create(void *data, struct sm_object *object)
 	struct impl *impl = data;
 	int res;
 
-	if (strcmp(object->type, PW_TYPE_INTERFACE_Endpoint) == 0)
+	if (spa_streq(object->type, PW_TYPE_INTERFACE_Endpoint))
 		res = handle_endpoint(impl, object);
-	else if (strcmp(object->type, PW_TYPE_INTERFACE_EndpointStream) == 0)
+	else if (spa_streq(object->type, PW_TYPE_INTERFACE_EndpointStream))
 		res = handle_stream(impl, object);
 	else
 		res = 0;
@@ -237,12 +241,12 @@ static void session_remove(void *data, struct sm_object *object)
 	struct impl *impl = data;
 	pw_log_debug(NAME " %p: remove global '%d'", impl, object->id);
 
-	if (strcmp(object->type, PW_TYPE_INTERFACE_Endpoint) == 0) {
+	if (spa_streq(object->type, PW_TYPE_INTERFACE_Endpoint)) {
 		struct endpoint *ep;
 		if ((ep = sm_object_get_data(object, SESSION_KEY)) != NULL)
 			destroy_endpoint(impl, ep);
 	}
-	else if (strcmp(object->type, PW_TYPE_INTERFACE_EndpointStream) == 0) {
+	else if (spa_streq(object->type, PW_TYPE_INTERFACE_EndpointStream)) {
 		struct stream *s;
 		if ((s = sm_object_get_data(object, SESSION_KEY)) != NULL)
 			destroy_stream(impl, s);
@@ -277,7 +281,7 @@ static int find_endpoint(void *data, struct endpoint *endpoint)
 		pw_log_debug(".. same direction");
 		return 0;
 	}
-	if (strcmp(endpoint->media, find->ep->media) != 0) {
+	if (!spa_streq(endpoint->media, find->ep->media)) {
 		pw_log_debug(".. incompatible media %s <-> %s", endpoint->media, find->ep->media);
 		return 0;
 	}
@@ -429,11 +433,11 @@ static int rescan_endpoint(struct impl *impl, struct endpoint *ep)
 		pw_log_debug(NAME " %p: target:%d", impl, path_id);
 
 		if ((obj = sm_media_session_find_object(impl->session, path_id)) != NULL) {
-			if (strcmp(obj->type, PW_TYPE_INTERFACE_Endpoint) == 0) {
+			if (spa_streq(obj->type, PW_TYPE_INTERFACE_Endpoint)) {
 				if ((peer = sm_object_get_data(obj, SESSION_KEY)) != NULL)
 					goto do_link;
 			}
-			else if (strcmp(obj->type, PW_TYPE_INTERFACE_Node) == 0) {
+			else if (spa_streq(obj->type, PW_TYPE_INTERFACE_Node)) {
 				node = (struct sm_node*)obj;
 				goto do_link_node;
 			}
@@ -454,7 +458,7 @@ static int rescan_endpoint(struct impl *impl, struct endpoint *ep)
 		}
 
 		obj = sm_media_session_find_object(impl->session, ep->client_id);
-		if (obj && strcmp(obj->type, PW_TYPE_INTERFACE_Client) == 0) {
+		if (obj && spa_streq(obj->type, PW_TYPE_INTERFACE_Client)) {
 			pw_client_error((struct pw_client*)obj->proxy,
 				ep->id, -ENOENT, "no endpoint available");
 		}
