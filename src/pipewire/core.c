@@ -35,13 +35,10 @@
 #include "pipewire/pipewire.h"
 #include "pipewire/private.h"
 
-#include "extensions/protocol-native.h"
+#include "pipewire/extensions/protocol-native.h"
 
 #define NAME "core"
 
-/** \cond */
-
-/** \endcond */
 static void core_event_ping(void *data, uint32_t id, int seq)
 {
 	struct pw_core *this = data;
@@ -105,8 +102,8 @@ static void core_event_add_mem(void *data, uint32_t id, uint32_t type, int fd, u
 
 	m = pw_mempool_import(this->pool, flags, type, fd);
 	if (m->id != id) {
-		pw_log_error(NAME" %p: invalid mem id %u, expected %u",
-				this, id, m->id);
+		pw_log_error(NAME" %p: invalid mem id %u, fd:%d expected %u",
+				this, id, fd, m->id);
 		pw_proxy_errorf(&this->proxy, -EINVAL, "invalid mem id %u, expected %u", id, m->id);
 		pw_memblock_unref(m);
 	}
@@ -394,8 +391,7 @@ error_proxy:
 exit_free:
 	free(p);
 exit_cleanup:
-	if (properties)
-		pw_properties_free(properties);
+	pw_properties_free(properties);
 	errno = -res;
 	return NULL;
 }

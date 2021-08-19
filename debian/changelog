@@ -1,9 +1,66 @@
-pipewire (0.3.28-1+apertis1atari1) atari; urgency=medium
+pipewire (0.3.32-1+apertis2atari1) atari; urgency=medium
 
   * Remaining atari changes:
     * Disable ldac support; pulls in too many dependencies
 
- -- Christopher Obbard <chris.obbard@collabora.com>  Thu, 27 May 2021 15:56:42 +0100
+ -- Christopher Obbard <chris.obbard@collabora.com>  Thu, 19 Aug 2021 11:05:03 +0100
+
+pipewire (0.3.32-1+apertis2) apertis; urgency=medium
+
+  [ Frederic Danis ]
+  * Refresh the automatically detected licensing information
+
+  [ Frédéric Danis ]
+  * Fix AppArmor rules for AMD64 targets
+
+ -- Frédéric Danis <frederic.danis@collabora.com>  Thu, 05 Aug 2021 09:10:05 +0200
+
+pipewire (0.3.32-1+apertis1) apertis; urgency=medium
+
+  * Sync updates from Debian Experimental
+    Remove merged patches
+
+ -- Ritesh Raj Sarraf <ritesh.sarraf@collabora.com>  Tue, 27 Jul 2021 18:39:12 +0530
+
+pipewire (0.3.32-1) experimental; urgency=medium
+
+  * Team upload.
+  * New upstream release
+  * Update symbols file
+
+ -- Dylan Aïssi <daissi@debian.org>  Wed, 21 Jul 2021 12:14:03 +0200
+
+pipewire (0.3.31-1) experimental; urgency=medium
+
+  * Team upload.
+  * New upstream release
+  * Add libusb-1.0-0-dev to Build-Depends
+  * Disable roc module at least for now
+  * Install bluez-hardware.conf in pipewire-media-session
+  * Update symbols file
+
+ -- Dylan Aïssi <daissi@debian.org>  Tue, 29 Jun 2021 12:09:29 +0200
+
+pipewire (0.3.30-1) experimental; urgency=medium
+
+  * Team upload.
+  * New upstream release
+  * Remove d/p/Let-pipewire-pulse-services-conflict-with-their-pulseaudi.patch,
+      applied upstream.
+  * Add libwebrtc-audio-processing-dev to Build-Depends
+  * Update symbols file
+  * Remove unused lintian override in pipewire-audio-client-libraries
+
+ -- Dylan Aïssi <daissi@debian.org>  Wed, 16 Jun 2021 12:07:16 +0200
+
+pipewire (0.3.28-1+apertis2) apertis; urgency=medium
+
+  * d/patches: Fix flatpak support
+  * Prepare AppArmor rule to support future protected clients
+  * Add PTrace capability in pipewire-pulse AppArmor rule
+  * Fix AppArmor rule for access from Flatpak container
+
+ -- Frédéric Danis <frederic.danis@collabora.com>  Fri, 04 Jun 2021 11:32:21 +0200
 
 pipewire (0.3.28-1+apertis1) apertis; urgency=medium
 

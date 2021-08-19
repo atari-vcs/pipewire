@@ -553,7 +553,7 @@ static int process_read(struct seq_state *state)
 		/* convert the age to samples and convert to an offset */
 		offset = (diff * state->rate.denom) / (state->rate.num * SPA_NSEC_PER_SEC);
 		if (state->duration > offset)
-			offset = state->duration - offset;
+			offset = state->duration - 1 - offset;
 		else
 			offset = 0;
 
@@ -834,8 +834,10 @@ static void reset_stream(struct seq_state *this, struct seq_stream *stream, bool
 static int set_timers(struct seq_state *state)
 {
 	struct timespec now;
+	int res;
 
-	spa_system_clock_gettime(state->data_system, CLOCK_MONOTONIC, &now);
+	if ((res = spa_system_clock_gettime(state->data_system, CLOCK_MONOTONIC, &now)) < 0)
+	    return res;
 
 	state->next_time = SPA_TIMESPEC_TO_NSEC(&now);
 	if (state->following) {

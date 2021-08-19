@@ -49,6 +49,9 @@
 
 #include <pipewire/impl.h>
 
+/** \page page_module_protocol_simple PipeWire Module: Protocol Simple
+ */
+
 #define NAME "protocol-simple"
 
 #define DEFAULT_PORT 4711
@@ -59,6 +62,8 @@
 #define DEFAULT_CHANNELS "2"
 #define DEFAULT_POSITION "[ FL FR ]"
 #define DEFAULT_LATENCY "1024/48000"
+
+#define MAX_CLIENTS	10
 
 #define MODULE_USAGE	"[ capture=<bool> ] "						\
 			"[ playback=<bool> ] "						\
@@ -129,6 +134,7 @@ struct server {
 	struct spa_source *source;
 
 	struct spa_list client_list;
+	uint32_t n_clients;
 };
 
 static void client_disconnect(struct client *client)
@@ -153,6 +159,7 @@ static void client_free(struct client *client)
 	client_disconnect(client);
 
 	spa_list_remove(&client->link);
+	client->server->n_clients--;
 
 	if (client->capture)
 		pw_stream_destroy(client->capture);
@@ -216,7 +223,7 @@ static void capture_process(void *data)
 	int res;
 
 	if ((buf = pw_stream_dequeue_buffer(client->capture)) == NULL) {
-		pw_log_warn("%p: client:%p [%s] out of capture buffers: %m", impl,
+		pw_log_debug("%p: client:%p [%s] out of capture buffers: %m", impl,
 				client, client->name);
 		return;
 	}
@@ -255,7 +262,7 @@ static void playback_process(void *data)
 	int res;
 
 	if ((buf = pw_stream_dequeue_buffer(client->playback)) == NULL) {
-		pw_log_warn("%p: client:%p [%s] out of playback buffers: %m", impl,
+		pw_log_debug("%p: client:%p [%s] out of playback buffers: %m", impl,
 				client, client->name);
 		return;
 	}
@@ -444,7 +451,7 @@ static void on_core_proxy_destroy(void *data)
 	client_cleanup(client);
 }
 
-static struct pw_proxy_events core_proxy_events = {
+static const struct pw_proxy_events core_proxy_events = {
 	PW_VERSION_CORE_EVENTS,
 	.destroy = on_core_proxy_destroy,
 };
@@ -465,6 +472,12 @@ on_connect(void *data, int fd, uint32_t mask)
 	if (client_fd < 0)
 		goto error;
 
+	if (server->n_clients >= MAX_CLIENTS) {
+		close(client_fd);
+		errno = ECONNREFUSED;
+		goto error;
+	}
+
 	client = calloc(1, sizeof(struct client));
 	if (client == NULL)
 		goto error;
@@ -472,9 +485,17 @@ on_connect(void *data, int fd, uint32_t mask)
 	client->impl = impl;
 	client->server = server;
 	spa_list_append(&server->client_list, &client->link);
+	server->n_clients++;
 
 	if (inet_ntop(addr.sa_family, addr.sa_data, client->name, sizeof(client->name)) == NULL)
 		snprintf(client->name, sizeof(client->name), "client %d", client_fd);
+
+	client->source = pw_loop_add_io(impl->loop,
+					client_fd,
+					SPA_IO_ERR | SPA_IO_HUP,
+					true, on_client_data, client);
+	if (client->source == NULL)
+		goto error;
 
 	pw_log_info(NAME" %p: client:%p [%s] connected", impl, client, client->name);
 
@@ -504,13 +525,6 @@ on_connect(void *data, int fd, uint32_t mask)
 		pw_properties_set(props, PW_KEY_CLIENT_ACCESS, "restricted");
 	}
 
-	client->source = pw_loop_add_io(impl->loop,
-					client_fd,
-					SPA_IO_ERR | SPA_IO_HUP,
-					true, on_client_data, client);
-	if (client->source == NULL)
-		goto error;
-
 	client->core = pw_context_connect(impl->context, props, 0);
 	props = NULL;
 	if (client->core == NULL)
@@ -525,8 +539,7 @@ on_connect(void *data, int fd, uint32_t mask)
 	return;
 error:
 	pw_log_error(NAME" %p: failed to create client: %m", impl);
-	if (props != NULL)
-		pw_properties_free(props);
+	pw_properties_free(props);
 	if (client != NULL)
 		client_free(client);
 	return;
@@ -653,8 +666,7 @@ static void impl_free(struct impl *impl)
 	spa_hook_remove(&impl->module_listener);
 	spa_list_consume(s, &impl->server_list, link)
 		server_free(s);
-	if (impl->props)
-		pw_properties_free(impl->props);
+	pw_properties_free(impl->props);
 	free(impl);
 }
 

@@ -38,8 +38,8 @@
 #include "pipewire/pipewire.h"
 #include "pipewire/private.h"
 
-#include "extensions/protocol-native.h"
-#include "extensions/client-node.h"
+#include "pipewire/extensions/protocol-native.h"
+#include "pipewire/extensions/client-node.h"
 
 #define MAX_MIX	4096
 
@@ -457,8 +457,7 @@ client_node_set_io(void *object,
 
 	res =  spa_node_set_io(data->node->node, id, ptr, size);
 
-	if (old != NULL)
-		pw_memmap_free(old);
+	pw_memmap_free(old);
 exit:
 	if (res < 0) {
 		pw_log_error("node %p: set_io: %s", proxy, spa_strerror(res));
@@ -809,8 +808,7 @@ client_node_port_set_io(void *object,
 			activate_mix(data, mix);
 	}
 exit_free:
-	if (old != NULL)
-		pw_memmap_free(old);
+	pw_memmap_free(old);
 exit:
 	if (res < 0) {
 		pw_log_error("port %p: set_io: %s", mix, spa_strerror(res));
@@ -1221,11 +1219,11 @@ static struct pw_proxy *node_export(struct pw_core *core, void *object, bool do_
 	data->client_node = (struct pw_client_node *)client_node;
 	data->remote_id = SPA_ID_INVALID;
 
-	data->allow_mlock = data->context->defaults.mem_allow_mlock;
+	data->allow_mlock = data->context->settings.mem_allow_mlock;
 	if ((str = pw_properties_get(node->properties, "mem.allow-mlock")) != NULL)
 		data->allow_mlock = pw_properties_parse_bool(str);
 
-	data->warn_mlock = data->context->defaults.mem_warn_mlock;
+	data->warn_mlock = data->context->settings.mem_warn_mlock;
 	if ((str = pw_properties_get(node->properties, "mem.warn-mlock")) != NULL)
 		data->warn_mlock = pw_properties_parse_bool(str);
 
@@ -1277,6 +1275,11 @@ struct pw_proxy *pw_core_spa_node_export(struct pw_core *core,
 {
 	struct pw_impl_node *node;
 	struct pw_proxy *proxy;
+	const char *str;
+	bool do_register;
+
+	str = props ? spa_dict_lookup(props, PW_KEY_OBJECT_REGISTER) : NULL;
+	do_register = str ? pw_properties_parse_bool(str) : true;
 
 	node = pw_context_create_node(pw_core_get_context(core),
 			props ? pw_properties_new_dict(props) : NULL, 0);
@@ -1284,7 +1287,9 @@ struct pw_proxy *pw_core_spa_node_export(struct pw_core *core,
 		return NULL;
 
 	pw_impl_node_set_implementation(node, (struct spa_node*)object);
-	pw_impl_node_register(node, NULL);
+
+	if (do_register)
+		pw_impl_node_register(node, NULL);
 
 	proxy = node_export(core, node, true, user_data_size);
 	if (proxy)
