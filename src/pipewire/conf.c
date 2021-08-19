@@ -69,12 +69,36 @@ static int get_read_path(char *path, size_t size, const char *prefix, const char
 	const char *dir;
 	char buffer[4096];
 
-	if (prefix[0] == '/') {
+	if (name[0] == '/') {
+		const char *paths[] = { name, NULL };
+		if (make_path(path, size, paths) == 0 &&
+		    access(path, R_OK) == 0)
+			return 1;
+		return -ENOENT;
+	}
+
+	if (prefix && prefix[0] == '/') {
 		const char *paths[] = { prefix, name, NULL };
 		if (make_path(path, size, paths) == 0 &&
 		    access(path, R_OK) == 0)
 			return 1;
 		return -ENOENT;
+	}
+
+	if (prefix == NULL) {
+		prefix = name;
+		name = NULL;
+	}
+
+	if (pw_check_option("no-config", "true"))
+		goto no_config;
+
+	dir = getenv("PIPEWIRE_CONFIG_DIR");
+	if (dir != NULL) {
+		const char *paths[] = { dir, prefix, name, NULL };
+		if (make_path(path, size, paths) == 0 &&
+		    access(path, R_OK) == 0)
+			return 1;
 	}
 
 	dir = getenv("XDG_CONFIG_HOME");
@@ -96,15 +120,15 @@ static int get_read_path(char *path, size_t size, const char *prefix, const char
 		    access(path, R_OK) == 0)
 			return 1;
 	}
-	dir = getenv("PIPEWIRE_CONFIG_DIR");
-	if (dir == NULL)
-		dir = PIPEWIRE_CONFIG_DIR;
+
+	dir = PIPEWIRE_CONFIG_DIR;
 	if (dir != NULL) {
 		const char *paths[] = { dir, prefix, name, NULL };
 		if (make_path(path, size, paths) == 0 &&
 		    access(path, R_OK) == 0)
 			return 1;
 	}
+no_config:
 	dir = PIPEWIRE_CONFDATADIR;
 	if (dir != NULL) {
 		const char *paths[] = { dir, prefix, name, NULL };
@@ -117,7 +141,7 @@ static int get_read_path(char *path, size_t size, const char *prefix, const char
 
 static int ensure_path(char *path, int size, const char *paths[])
 {
-	int i, len, res, mode;
+	int i, len, mode;
 	char *p = path;
 
 	for (i = 0; paths[i] != NULL; i++) {
@@ -134,14 +158,14 @@ static int ensure_path(char *path, int size, const char *paths[])
 		if (paths[i+1] == NULL)
 			mode |= R_OK | W_OK;
 
-		if ((res = access(path, mode)) < 0) {
+		if (access(path, mode) < 0) {
 			if (errno != ENOENT)
 				return -errno;
-			if ((res = mkdir(path, 0700)) < 0) {
+			if (mkdir(path, 0700) < 0) {
 				pw_log_info("Can't create directory %s: %m", path);
                                 return -errno;
 			}
-			if ((res = access(path, mode)) < 0)
+			if (access(path, mode) < 0)
 				return -errno;
 
 			pw_log_info("created directory %s", path);
@@ -190,7 +214,6 @@ found:
 SPA_EXPORT
 int pw_conf_save_state(const char *prefix, const char *name, struct pw_properties *conf)
 {
-	const struct spa_dict_item *it;
 	char path[PATH_MAX];
 	char *tmp_name;
 	int res, sfd, fd, count = 0;
@@ -209,14 +232,7 @@ int pw_conf_save_state(const char *prefix, const char *name, struct pw_propertie
 
 	f = fdopen(fd, "w");
 	fprintf(f, "{");
-	spa_dict_for_each(it, &conf->dict) {
-		char key[1024];
-
-		if (spa_json_encode_string(key, sizeof(key)-1, it->key) >= (int)sizeof(key)-1)
-			continue;
-
-		fprintf(f, "%s\n  %s: %s", count++ == 0 ? "" : ",", key, it->value);
-	}
+	count += pw_properties_serialize_dict(f, &conf->dict, PW_PROPERTIES_FLAG_NL);
 	fprintf(f, "%s}", count == 0 ? " " : "\n");
 	fclose(f);
 
@@ -238,9 +254,9 @@ static int conf_load(const char *prefix, const char *name, struct pw_properties 
 	struct stat sbuf;
 	int fd;
 
-	if (prefix == NULL) {
-		prefix = name;
-		name = NULL;
+	if (name == NULL) {
+		pw_log_debug(NAME" %p: config name must not be NULL", conf);
+		return -EINVAL;
 	}
 
 	if (get_read_path(path, sizeof(path), prefix, name) == 0) {
@@ -292,16 +308,13 @@ static int parse_spa_libs(struct pw_context *context, char *str)
 	int count = 0;
 
 	spa_json_init(&it[0], str, strlen(str));
-	if (spa_json_enter_object(&it[0], &it[1]) < 0)
+	if (spa_json_enter_object(&it[0], &it[1]) < 0) {
+		pw_log_error("config file error: context.spa-libs is not an object");
 		return -EINVAL;
+	}
 
 	while (spa_json_get_string(&it[1], key, sizeof(key)-1) > 0) {
-		const char *val;
-		if (key[0] == '#') {
-			if (spa_json_next(&it[1], &val) <= 0)
-				break;
-		}
-		else if (spa_json_get_string(&it[1], value, sizeof(value)-1) > 0) {
+		if (spa_json_get_string(&it[1], value, sizeof(value)-1) > 0) {
 			pw_context_add_spa_lib(context, key, value);
 			count++;
 		}
@@ -344,8 +357,10 @@ static int parse_modules(struct pw_context *context, char *str)
 	int res = 0, count = 0;
 
 	spa_json_init(&it[0], str, strlen(str));
-	if (spa_json_enter_array(&it[0], &it[1]) < 0)
+	if (spa_json_enter_array(&it[0], &it[1]) < 0) {
+		pw_log_error("config file error: context.modules is not an array");
 		return -EINVAL;
+	}
 
 	while (spa_json_enter_object(&it[1], &it[2]) > 0) {
 		char *name = NULL, *args = NULL, *flags = NULL;
@@ -426,8 +441,10 @@ static int parse_objects(struct pw_context *context, char *str)
 	int res = 0, count = 0;
 
 	spa_json_init(&it[0], str, strlen(str));
-	if (spa_json_enter_array(&it[0], &it[1]) < 0)
+	if (spa_json_enter_array(&it[0], &it[1]) < 0) {
+		pw_log_error("config file error: context.objects is not an array");
 		return -EINVAL;
+	}
 
 	while (spa_json_enter_object(&it[1], &it[2]) > 0) {
 		char *factory = NULL, *args = NULL, *flags = NULL;
@@ -511,8 +528,10 @@ static int parse_exec(struct pw_context *context, char *str)
 	int res = 0, count = 0;
 
 	spa_json_init(&it[0], str, strlen(str));
-	if (spa_json_enter_array(&it[0], &it[1]) < 0)
+	if (spa_json_enter_array(&it[0], &it[1]) < 0) {
+		pw_log_error("config file error: context.exec is not an array");
 		return -EINVAL;
+	}
 
 	while (spa_json_enter_object(&it[1], &it[2]) > 0) {
 		char *path = NULL, *args = NULL;

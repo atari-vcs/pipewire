@@ -31,6 +31,11 @@ extern "C" {
 
 #include <spa/support/loop.h>
 
+/**
+ * \addtogroup spa_support
+ * \{
+ */
+
 #define SPA_TYPE_INTERFACE_DBus		SPA_TYPE_INFO_INTERFACE_BASE "DBus"
 
 #define SPA_VERSION_DBUS		0
@@ -62,6 +67,11 @@ struct spa_dbus_connection {
         uint32_t version;
 	/**
 	 * Get the DBusConnection from a wrapper
+	 *
+	 * Note that the returned handle is closed and unref'd by spa_dbus
+	 * immediately before emitting the asynchronous "disconnected" event.
+	 * The caller must either deal with the invalidation, or keep an extra
+	 * ref on the handle returned.
 	 *
 	 * \param conn the spa_dbus_connection wrapper
 	 * \return a pointer of type DBusConnection
@@ -132,6 +142,10 @@ spa_dbus_get_connection(struct spa_dbus *dbus, enum spa_dbus_type type)
 			get_connection, 0, type);
 	return res;
 }
+
+/**
+ * \}
+ */
 
 #ifdef __cplusplus
 }  /* extern "C" */

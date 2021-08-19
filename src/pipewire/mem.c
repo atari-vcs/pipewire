@@ -90,8 +90,6 @@ static inline int memfd_create(const char *name, unsigned int flags)
 #define F_SEAL_WRITE    0x0008	/* prevent writes */
 #endif
 
-static struct spa_list _mempools = SPA_LIST_INIT(&_mempools);
-
 #define pw_mempool_emit(p,m,v,...) spa_hook_list_call(&p->listener_list, struct pw_mempool_events, m, v, ##__VA_ARGS__)
 #define pw_mempool_emit_destroy(p)	pw_mempool_emit(p, destroy, 0)
 #define pw_mempool_emit_added(p,b)	pw_mempool_emit(p, added, 0, b)
@@ -99,8 +97,6 @@ static struct spa_list _mempools = SPA_LIST_INIT(&_mempools);
 
 struct mempool {
 	struct pw_mempool this;
-
-	struct spa_list link;		/* link in global _mempools */
 
 	struct spa_hook_list listener_list;
 
@@ -154,8 +150,6 @@ struct pw_mempool *pw_mempool_new(struct pw_properties *props)
 	pw_map_init(&impl->map, 64, 64);
 	spa_list_init(&impl->blocks);
 
-	spa_list_append(&_mempools, &impl->link);
-
 	return this;
 }
 
@@ -181,13 +175,10 @@ void pw_mempool_destroy(struct pw_mempool *pool)
 
 	pw_mempool_clear(pool);
 
-	spa_list_remove(&impl->link);
-
 	spa_hook_list_clean(&impl->listener_list);
 
 	pw_map_clear(&impl->map);
-	if (pool->props)
-		pw_properties_free(pool->props);
+	pw_properties_free(pool->props);
 	free(impl);
 }
 
@@ -205,7 +196,6 @@ void pw_mempool_add_listener(struct pw_mempool *pool,
 /** Map a memblock
  * \param mem a memblock
  * \return 0 on success, < 0 on error
- * \memberof pw_memblock
  */
 SPA_EXPORT
 int pw_memblock_map_old(struct pw_memblock *mem)
@@ -425,10 +415,18 @@ struct pw_memmap * pw_mempool_map_id(struct pw_mempool *pool,
 SPA_EXPORT
 int pw_memmap_free(struct pw_memmap *map)
 {
-	struct memmap *mm = SPA_CONTAINER_OF(map, struct memmap, this);
-	struct mapping *m = mm->mapping;
-	struct memblock *b = m->block;
-	struct mempool *p = SPA_CONTAINER_OF(b->this.pool, struct mempool, this);
+	struct memmap *mm;
+	struct mapping *m;
+	struct memblock *b;
+	struct mempool *p;
+
+	if (map == NULL)
+		return 0;
+
+	mm = SPA_CONTAINER_OF(map, struct memmap, this);
+	m = mm->mapping;
+	b = m->block;
+	p = SPA_CONTAINER_OF(b->this.pool, struct mempool, this);
 
         pw_log_debug(NAME" %p: map:%p block:%p fd:%d ptr:%p mapping:%p ref:%d", p,
 			&mm->this, b, b->this.fd, mm->this.ptr, m, m->ref);
@@ -461,7 +459,6 @@ static inline enum pw_memmap_flags block_flags_to_mem(enum pw_memblock_flags fla
  * \param type the requested memory type one of enum spa_data_type
  * \param size size to allocate
  * \return a memblock structure or NULL with errno on error
- * \memberof pw_memblock
  */
 SPA_EXPORT
 struct pw_memblock * pw_mempool_alloc(struct pw_mempool *pool, enum pw_memblock_flags flags,
@@ -686,7 +683,6 @@ int pw_mempool_remove_id(struct pw_mempool *pool, uint32_t id)
 
 /** Free a memblock
  * \param block a memblock
- * \memberof pw_memblock
  */
 SPA_EXPORT
 void pw_memblock_free(struct pw_memblock *block)
