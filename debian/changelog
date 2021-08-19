@@ -1,3 +1,10 @@
+pipewire (0.3.32-1+apertis2atari1) atari; urgency=medium
+
+  * Remaining atari changes:
+    * Disable ldac support; pulls in too many dependencies
+
+ -- Christopher Obbard <chris.obbard@collabora.com>  Thu, 19 Aug 2021 11:05:03 +0100
+
 pipewire (0.3.32-1+apertis2) apertis; urgency=medium
 
   [ Frederic Danis ]
