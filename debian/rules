@@ -36,6 +36,9 @@ override_dh_auto_configure:
 		-Dvideotestsrc=enabled \
 		-Dvolume=enabled \
 		-Dvulkan=disabled \
+		-Dsdl2=disabled \
+		-Dpipewire-jack=disabled \
+		-Djack=disabled \
 		$(NULL)
 	install -d debian/ld.so.conf.d
 	echo "/usr/lib/$(DEB_HOST_MULTIARCH)/pipewire-0.3/jack/" > "debian/ld.so.conf.d/pipewire-jack-$(DEB_HOST_MULTIARCH).conf"
@@ -49,6 +52,10 @@ endif
 ifneq ($(filter mips%,$(DEB_HOST_ARCH_CPU)),)
 test_timeout_multiplier = 10
 endif
+
+override_dh_install:
+	dh_install
+	dh_apparmor -ppipewire --profile-name=usr.bin.pipewire
 
 override_dh_auto_test:
 	dh_auto_test \

@@ -1,0 +1,12 @@
+  #include <abstractions/freedesktop.org>
+  #include <abstractions/audio>
+
+  owner @{HOME}/.Xauthority		r,
+
+
+# Applications can launch pulse due to autolaunching in some cases
+  /usr/bin/pipewire                          rmPx,
+
+  # pulseaudio probes whether other processes exist so that it can
+  # know whether to clean up their shared memory segments.
+  signal (receive) set=("exists") peer=/usr/bin/pipewire,

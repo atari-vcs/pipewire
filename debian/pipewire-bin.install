@@ -31,3 +31,4 @@ usr/share/man/man1/pw-mididump.*
 usr/share/man/man1/pw-mon.*
 usr/share/man/man1/pw-profiler.*
 usr/share/man/man5
+debian/apparmor.d/usr.bin.pipewire etc/apparmor.d/

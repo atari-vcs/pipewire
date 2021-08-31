@@ -4,6 +4,7 @@ Priority: optional
 Maintainer: Utopia Maintenance Team <pkg-utopia-maintainers@alioth-lists.debian.net>
 Uploaders: Jeremy Bicha <jbicha@debian.org>
 Build-Depends: debhelper-compat (= 13),
+               dh-apparmor,
                doxygen <!nodoc>,
                graphviz <!nodoc>,
                libasound2-dev,
@@ -12,14 +13,13 @@ Build-Depends: debhelper-compat (= 13),
                libglib2.0-dev (>= 2.32.0),
                libgstreamer-plugins-base1.0-dev,
                libgstreamer1.0-dev,
-               libjack-jackd2-dev (>= 1.9.10),
                libldacbt-abr-dev [!s390x !hppa !m68k !powerpc !ppc64 !sparc64],
                libldacbt-enc-dev [!s390x !hppa !m68k !powerpc !ppc64 !sparc64],
                libncurses-dev,
 #              libopenaptx-dev (>= 0.2.0-5~),
                libpulse-dev (>= 11.1),
                libsbc-dev,
-               libsdl2-dev,
+#              libsdl2-dev,
                libsndfile1-dev (>= 1.0.20),
                libsystemd-dev [linux-any],
                libudev-dev [linux-any],
@@ -318,21 +318,21 @@ Description: libraries for the PipeWire multimedia server - bluetooth plugins
  to be experimental, and is disabled by default (even if installed) to
  avoid conflicts with equivalent functionality in PulseAudio.
 
-Package: libspa-0.2-jack
-Architecture: linux-any
-Multi-Arch: same
-Depends: libspa-0.2-modules (= ${binary:Version}),
-         ${misc:Depends},
-         ${shlibs:Depends}
-Description: libraries for the PipeWire multimedia server - JACK client
- PipeWire is a server and user space API to deal with multimedia
- pipelines. This includes:
- .
-  - Making available sources of video (such as from a capture devices or
-    application provided streams) and multiplexing this with clients.
-  - Accessing sources of video for consumption.
-  - Generating graphs for audio and video processing.
- .
- This package contains a plugin to make PipeWire able to connect to a
- JACK server, which will be used for audio playback and recording.
- Using PipeWire for audio is considered to be experimental.
+#Package: libspa-0.2-jack
+#Architecture: linux-any
+#Multi-Arch: same
+#Depends: libspa-0.2-modules (= ${binary:Version}),
+#         ${misc:Depends},
+#         ${shlibs:Depends}
+#Description: libraries for the PipeWire multimedia server - JACK client
+# PipeWire is a server and user space API to deal with multimedia
+# pipelines. This includes:
+# .
+#  - Making available sources of video (such as from a capture devices or
+#    application provided streams) and multiplexing this with clients.
+#  - Accessing sources of video for consumption.
+#  - Generating graphs for audio and video processing.
+# .
+# This package contains a plugin to make PipeWire able to connect to a
+# JACK server, which will be used for audio playback and recording.
+# Using PipeWire for audio is considered to be experimental.

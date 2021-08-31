@@ -1,0 +1,40 @@
+#include <tunables/global>
+
+# attach_disconnected flag is needed to open /proc/<pid>/root
+# when called from flatpak containers
+profile /usr/bin/pipewire-pulse flags=(attach_disconnected) {
+  #include <abstractions/chaiwala-base>
+  #include <abstractions/dbus-strict>
+  #include <abstractions/dbus-session-strict>
+  #include <abstractions/nameservice>
+  #include <abstractions/pipewire>
+  #include <abstractions/user-tmp>
+  #include <abstractions/orc>
+
+  dbus send
+       bus=session
+       path=/org/freedesktop/DBus
+       interface=org.freedesktop.DBus
+       member={RequestName,ReleaseName}
+       peer=(name=org.freedesktop.DBus),
+  dbus bind bus=session name=org.pulseaudio.Server,
+
+  capability sys_ptrace,
+
+  @{HOME}/.config/pulse/                       rw,
+  @{HOME}/.config/pulse/**                     rw,
+
+  /                                            r,
+  /etc/pipewire/*.conf                         r,
+  /sys/devices/virtual/dmi/id/*                r,
+  owner @{PROC}/*/stat                         r,
+  owner @{PROC}/*/fd/                          r,
+  owner @{PROC}/*/fd/*                         r,
+  /.flatpak-info                               r,
+
+
+  # This seems to be mediated as ptrace(trace), ptrace(traceby).
+  ptrace (read),
+
+  /run/user/*/pipewire*                        rw,
+}

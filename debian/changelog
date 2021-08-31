@@ -1,3 +1,13 @@
+pipewire (0.3.34-1+apertis1) apertis; urgency=medium
+
+  * Sync updates from Debian Bookworm. Remaining Apertis specific changes:
+    - Continue to disable build-depends:
+      - libsdl2 (not needed)
+      - libjack-jackd2-dev (not needed)
+    - Add apparmor rules
+
+ -- Dylan Aïssi <dylan.aissi@collabora.com>  Tue, 31 Aug 2021 12:16:09 +0200
+
 pipewire (0.3.34-1) unstable; urgency=medium
 
   * Team upload.
@@ -16,6 +26,23 @@ pipewire (0.3.33-1) unstable; urgency=medium
   * Upload to unstable as Bullseye was released.
 
  -- Dylan Aïssi <daissi@debian.org>  Mon, 16 Aug 2021 11:44:56 +0200
+
+pipewire (0.3.32-1+apertis2) apertis; urgency=medium
+
+  [ Frederic Danis ]
+  * Refresh the automatically detected licensing information
+
+  [ Frédéric Danis ]
+  * Fix AppArmor rules for AMD64 targets
+
+ -- Frédéric Danis <frederic.danis@collabora.com>  Thu, 05 Aug 2021 09:10:05 +0200
+
+pipewire (0.3.32-1+apertis1) apertis; urgency=medium
+
+  * Sync updates from Debian Experimental
+    Remove merged patches
+
+ -- Ritesh Raj Sarraf <ritesh.sarraf@collabora.com>  Tue, 27 Jul 2021 18:39:12 +0530
 
 pipewire (0.3.32-1) experimental; urgency=medium
 
@@ -48,6 +75,26 @@ pipewire (0.3.30-1) experimental; urgency=medium
 
  -- Dylan Aïssi <daissi@debian.org>  Wed, 16 Jun 2021 12:07:16 +0200
 
+pipewire (0.3.28-1+apertis2) apertis; urgency=medium
+
+  * d/patches: Fix flatpak support
+  * Prepare AppArmor rule to support future protected clients
+  * Add PTrace capability in pipewire-pulse AppArmor rule
+  * Fix AppArmor rule for access from Flatpak container
+
+ -- Frédéric Danis <frederic.danis@collabora.com>  Fri, 04 Jun 2021 11:32:21 +0200
+
+pipewire (0.3.28-1+apertis1) apertis; urgency=medium
+
+  * Sync updates from Debian Experimental
+  * Continue to disable build-depends
+    - libsdl2 (not needed)
+    - libjack-jackd2-dev (not needed)
+    - libopenaptx-dev (proprietary codec, unknown legal status)
+  * Add apparmor rules
+
+ -- Frédéric Danis <frederic.danis@collabora.com>  Tue, 27 May 2021 16:12:50 +0200
+
 pipewire (0.3.28-1) experimental; urgency=medium
 
   [ Frédéric Danis ]
@@ -71,6 +118,17 @@ pipewire (0.3.27-1) experimental; urgency=medium
 
  -- Sjoerd Simons <sjoerd@debian.org>  Wed, 12 May 2021 20:37:03 +0200
 
+pipewire (0.3.26-1apertis1) apertis; urgency=medium
+
+  * Sync updates from Debian Experimental
+  * Continue to disable build-depends
+    - libsdl2 (not needed)
+    - libjack-jackd2-dev (not needed)
+    - libopenaptx-dev (proprietary codec, unknown legal status)
+  * Continue to enable pipewire pulse units by default
+
+ -- Frédéric Danis <frederic.danis@collabora.com>  Wed, 12 May 2021 10:31:55 +0200
+
 pipewire (0.3.26-1) experimental; urgency=medium
 
   * New upstream release
@@ -79,6 +137,23 @@ pipewire (0.3.26-1) experimental; urgency=medium
   * Update libpipewire-0.3-0 symbols
 
  -- Sjoerd Simons <sjoerd@debian.org>  Sun, 25 Apr 2021 20:54:29 +0200
+
+pipewire (0.3.25-1apertis2) apertis; urgency=medium
+
+  * Enable pulseaudio compatibility later by default
+
+ -- Sjoerd Simons <sjoerd@collabora.com>  Tue, 20 Apr 2021 11:18:09 +0200
+
+pipewire (0.3.25-1apertis1) apertis; urgency=medium
+
+  * Disable build-depends
+    - libsdl2 (not needed)
+    - libjack-jackd2-dev (not needed)
+    - libopenaptx-dev (proprietary codec, unknown legal status)
+  * Drop debian/apertis/gitlab-ci.yml, no longer needed
+  * Enable pipewire pulse units by default
+
+ -- Sjoerd Simons <sjoerd@collabora.com>  Thu, 15 Apr 2021 14:40:14 +0000
 
 pipewire (0.3.25-1) experimental; urgency=medium
 

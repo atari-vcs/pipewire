@@ -1,0 +1,37 @@
+#include <tunables/global>
+
+profile /usr/bin/pipewire {
+  #include <abstractions/chaiwala-base>
+  #include <abstractions/dbus-strict>
+  #include <abstractions/dbus-session-strict>
+  #include <abstractions/nameservice>
+  #include <abstractions/pipewire>
+  #include <abstractions/user-tmp>
+  #include <abstractions/orc>
+
+  dbus send bus=system peer=(name=org.freedesktop.RealtimeKit1),
+
+  dbus (send, receive) bus=session peer=(label=unconfined),
+
+  @{HOME}/.ICEauthority                        r,
+  @{HOME}/.config/pipewire/                    rw,
+  @{HOME}/.config/pipewire/**                  rw,
+
+  /                                            r,
+  /etc/pipewire/                               r,
+  /etc/pipewire/*.conf                         r,
+  /dev/video*                                  rw,
+  /sys/devices/virtual/dmi/id/*                r,
+  owner @{PROC}/*/stat                         r,
+  owner @{PROC}/*/fd/                          r,
+  owner @{PROC}/*/fd/*                         r,
+
+  # This seems to be mediated as ptrace(trace), ptrace(traceby).
+  ptrace (read),
+
+  # tell systemd --user that we're ready
+  /run/user/*/systemd/notify w,
+
+  owner /run/user/*/pipewire*                  krw,
+  owner /run/user/*/pulse/{,*}                 krw,
+}
