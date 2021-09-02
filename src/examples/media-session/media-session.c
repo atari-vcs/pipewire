@@ -55,8 +55,8 @@
 #include "pipewire/pipewire.h"
 #include "pipewire/private.h"
 #include "pipewire/conf.h"
-#include "extensions/session-manager.h"
-#include "extensions/client-node.h"
+#include "pipewire/extensions/session-manager.h"
+#include "pipewire/extensions/client-node.h"
 
 #include <dbus/dbus.h>
 
@@ -94,6 +94,7 @@ int sm_alsa_midi_start(struct sm_media_session *sess);
 int sm_v4l2_monitor_start(struct sm_media_session *sess);
 int sm_libcamera_monitor_start(struct sm_media_session *sess);
 int sm_bluez5_monitor_start(struct sm_media_session *sess);
+int sm_bluez5_autoswitch_start(struct sm_media_session *sess);
 int sm_alsa_monitor_start(struct sm_media_session *sess);
 int sm_suspend_node_start(struct sm_media_session *sess);
 #ifdef HAVE_SYSTEMD
@@ -341,10 +342,8 @@ unref:
 	if (!obj->discarded)
 		return 0;
 
-	if (obj->props) {
-		pw_properties_free(obj->props);
-		obj->props = NULL;
-	}
+	pw_properties_free(obj->props);
+	obj->props = NULL;
 
 	spa_list_consume(d, &obj->data, link) {
 		spa_list_remove(&d->link);
@@ -818,8 +817,7 @@ static void session_event_info(void *object, const struct pw_session_info *info)
 	if (info) {
 		i->change_mask = info->change_mask;
 		if (info->change_mask & PW_SESSION_CHANGE_MASK_PROPS) {
-			if (i->props)
-				pw_properties_free ((struct pw_properties *)i->props);
+			pw_properties_free ((struct pw_properties *)i->props);
 			i->props = (struct spa_dict *) pw_properties_new_dict (info->props);
 		}
 	}
@@ -857,8 +855,7 @@ static void session_destroy(void *object)
 		spa_list_remove(&endpoint->link);
 	}
 	if (i) {
-		if (i->props)
-			pw_properties_free ((struct pw_properties *)i->props);
+		pw_properties_free ((struct pw_properties *)i->props);
 		free(i);
 	}
 
@@ -898,8 +895,7 @@ static void endpoint_event_info(void *object, const struct pw_endpoint_info *inf
 			i->session_id = info->session_id;
 		}
 		if (info->change_mask & PW_ENDPOINT_CHANGE_MASK_PROPS) {
-			if (i->props)
-				pw_properties_free ((struct pw_properties *)i->props);
+			pw_properties_free ((struct pw_properties *)i->props);
 			i->props = (struct spa_dict *) pw_properties_new_dict (info->props);
 			if ((str = spa_dict_lookup(i->props, PW_KEY_PRIORITY_SESSION)) != NULL)
 				endpoint->priority = pw_properties_parse_int(str);
@@ -954,8 +950,7 @@ static void endpoint_destroy(void *object)
 		spa_list_remove(&endpoint->link);
 	}
 	if (i) {
-		if (i->props)
-			pw_properties_free ((struct pw_properties *)i->props);
+		pw_properties_free ((struct pw_properties *)i->props);
 		free(i->name);
 		free(i->media_class);
 		free(i);
@@ -1321,8 +1316,7 @@ static void registry_event_free(struct registry_event *re)
 {
 	if (re->proxy)
 		pw_proxy_destroy(re->proxy);
-	if (re->props_store)
-		pw_properties_free(re->props_store);
+	pw_properties_free(re->props_store);
 	if (re->allocated) {
 		spa_list_remove(&re->link);
 		free(re);
@@ -1355,7 +1349,7 @@ static int handle_registry_event(struct impl *impl, struct registry_event *re)
 		 * removed. In that case, we create a zombie object here, but its remove
 		 * event is already queued and arrives soon.
 		 */
-		obj = bind_object(impl, info, re);
+		bind_object(impl, info, re);
 	} else if (obj != NULL && obj->monitor_global == re->monitor) {
 		/* Each core handles their own object updates */
 		update_object(impl, info, obj, re);
@@ -2038,11 +2032,14 @@ char *sm_media_session_sanitize_name(char *name, int size, char sub, const char 
 {
 	char *p;
 	va_list varargs;
+	int res;
 
 	va_start(varargs, fmt);
-	if (vsnprintf(name, size, fmt, varargs) < 0)
-		return NULL;
+	res = vsnprintf(name, size, fmt, varargs);
 	va_end(varargs);
+
+	if (res < 0)
+		return NULL;
 
 	for (p = name; *p; p++) {
 		switch(*p) {
@@ -2063,11 +2060,14 @@ char *sm_media_session_sanitize_description(char *name, int size, char sub, cons
 {
 	char *p;
 	va_list varargs;
+	int res;
 
 	va_start(varargs, fmt);
-	if (vsnprintf(name, size, fmt, varargs) < 0)
-		return NULL;
+	res = vsnprintf(name, size, fmt, varargs);
 	va_end(varargs);
+
+	if (res < 0)
+		return NULL;
 
 	for (p = name; *p; p++) {
 		switch(*p) {
@@ -2350,9 +2350,7 @@ again:
 	while (spa_json_get_string(&it[1], key, sizeof(key)-1) > 0) {
 		bool add = false;
 
-		if (key[0] == '#') {
-			add = false;
-		} else if (pw_properties_get(impl->modules, key) != NULL) {
+		if (pw_properties_get(impl->modules, key) != NULL) {
 			add = true;
 		} else {
 			snprintf(check_path, sizeof(check_path),
@@ -2364,8 +2362,6 @@ again:
 				continue;
 
 			while (spa_json_get_string(&it[2], value, sizeof(value)-1) > 0) {
-				if (value[0] == '#')
-					continue;
 				pw_properties_set(impl->modules, value, "true");
 			}
 		}
@@ -2399,6 +2395,7 @@ static const struct {
 	{ "v4l2", "video for linux udev detection", sm_v4l2_monitor_start, NULL },
 	{ "libcamera", "libcamera udev detection", sm_libcamera_monitor_start, NULL },
 	{ "bluez5", "bluetooth support", sm_bluez5_monitor_start, NULL },
+	{ "bluez5-autoswitch", "switch bluetooth profiles automatically", sm_bluez5_autoswitch_start, NULL },
 	{ "suspend-node", "suspend inactive nodes", sm_suspend_node_start, NULL },
 	{ "policy-node", "configure and link nodes", sm_policy_node_start, NULL },
 	{ "pulse-bridge", "accept pulseaudio clients", sm_pulse_bridge_start, NULL },

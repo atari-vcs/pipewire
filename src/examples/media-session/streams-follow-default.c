@@ -33,9 +33,12 @@
 #include "config.h"
 
 #include "pipewire/pipewire.h"
-#include "extensions/metadata.h"
+#include "pipewire/extensions/metadata.h"
 
 #include "media-session.h"
+
+/** \page page_media_session_module_stream_follow_default Media Session Module: Stream Follow Default
+ */
 
 #define KEY_NAME	"policy-node.streams-follow-default"
 

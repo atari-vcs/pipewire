@@ -59,6 +59,7 @@ struct impl {
 
 	unsigned int pause_on_idle:1;
 	unsigned int cache_params:1;
+	unsigned int pending_play:1;
 };
 
 #define pw_node_resource(r,m,v,...)	pw_resource_call(r,struct pw_node_events,m,v,__VA_ARGS__)
@@ -215,9 +216,11 @@ static int start_node(struct pw_impl_node *this)
 
 	pw_log_debug(NAME" %p: start node", this);
 
-	if (!(this->driving && this->driver))
+	if (!(this->driving && this->driver)) {
+		impl->pending_play = true;
 		res = spa_node_send_command(this->node,
 			&SPA_NODE_COMMAND_INIT(SPA_NODE_COMMAND_Start));
+	}
 
 	if (res < 0)
 		pw_log_error("(%s-%u) start node error %d: %s", this->name, this->info.id,
@@ -650,9 +653,7 @@ SPA_EXPORT
 int pw_impl_node_register(struct pw_impl_node *this,
 		     struct pw_properties *properties)
 {
-	struct pw_context *context = this->context;
-	struct pw_impl_port *port;
-	const char *keys[] = {
+	static const char * const keys[] = {
 		PW_KEY_OBJECT_PATH,
 		PW_KEY_MODULE_ID,
 		PW_KEY_FACTORY_ID,
@@ -671,6 +672,9 @@ int pw_impl_node_register(struct pw_impl_node *this,
 		PW_KEY_MEDIA_ROLE,
 		NULL
 	};
+
+	struct pw_context *context = this->context;
+	struct pw_impl_port *port;
 
 	pw_log_debug(NAME" %p: register", this);
 
@@ -718,8 +722,7 @@ int pw_impl_node_register(struct pw_impl_node *this,
 	return 0;
 
 error_existed:
-	if (properties)
-		pw_properties_free(properties);
+	pw_properties_free(properties);
 	return -EEXIST;
 }
 
@@ -802,21 +805,12 @@ int pw_impl_node_set_driver(struct pw_impl_node *node, struct pw_impl_node *driv
 	return 0;
 }
 
-static uint32_t flp2(uint32_t x)
-{
-	x = x | (x >> 1);
-	x = x | (x >> 2);
-	x = x | (x >> 4);
-	x = x | (x >> 8);
-	x = x | (x >> 16);
-	return x - (x >> 1);
-}
-
 static void check_properties(struct pw_impl_node *node)
 {
 	struct impl *impl = SPA_CONTAINER_OF(node, struct impl, this);
 	struct pw_context *context = node->context;
 	const char *str, *recalc_reason = NULL;
+	struct spa_fraction frac;
 	bool driver;
 
 	if ((str = pw_properties_get(node->properties, PW_KEY_PRIORITY_DRIVER))) {
@@ -831,20 +825,14 @@ static void check_properties(struct pw_impl_node *node)
 		pw_log_debug(NAME" %p: name '%s'", node, node->name);
 	}
 
-	if ((str = pw_properties_get(node->properties, PW_KEY_NODE_PAUSE_ON_IDLE)))
-		impl->pause_on_idle = pw_properties_parse_bool(str);
-	else
-		impl->pause_on_idle = true;
+	str = pw_properties_get(node->properties, PW_KEY_NODE_PAUSE_ON_IDLE);
+	impl->pause_on_idle = str ? pw_properties_parse_bool(str) : true;
 
-	if ((str = pw_properties_get(node->properties, PW_KEY_NODE_CACHE_PARAMS)))
-		impl->cache_params = pw_properties_parse_bool(str);
-	else
-		impl->cache_params = true;
+	str = pw_properties_get(node->properties, PW_KEY_NODE_CACHE_PARAMS);
+	impl->cache_params = str ? pw_properties_parse_bool(str) : true;
 
-	if ((str = pw_properties_get(node->properties, PW_KEY_NODE_DRIVER)))
-		driver = pw_properties_parse_bool(str);
-	else
-		driver = false;
+	str = pw_properties_get(node->properties, PW_KEY_NODE_DRIVER);
+	driver = str ? pw_properties_parse_bool(str) : false;
 
 	if (node->driver != driver) {
 		pw_log_debug(NAME" %p: driver %d -> %d", node, node->driver, driver);
@@ -869,53 +857,53 @@ static void check_properties(struct pw_impl_node *node)
 		recalc_reason = "group changed";
 	}
 
-	if ((str = pw_properties_get(node->properties, PW_KEY_NODE_ALWAYS_PROCESS)))
-		node->want_driver = pw_properties_parse_bool(str);
-	else
-		node->want_driver = false;
+	str = pw_properties_get(node->properties, PW_KEY_NODE_WANT_DRIVER);
+	node->want_driver = str ? pw_properties_parse_bool(str) : false;
+
+	str = pw_properties_get(node->properties, PW_KEY_NODE_ALWAYS_PROCESS);
+	node->always_process = str ? pw_properties_parse_bool(str) : false;
+
+	if (node->always_process)
+		node->want_driver = true;
 
 	if ((str = pw_properties_get(node->properties, PW_KEY_NODE_LATENCY))) {
-		uint32_t num, denom;
-                if (sscanf(str, "%u/%u", &num, &denom) == 2 && denom != 0) {
-			uint32_t quantum_size;
-
-			node->latency = SPA_FRACTION(num, denom);
-			quantum_size = (num * context->defaults.clock_rate / denom);
-			if (context->defaults.clock_power_of_two_quantum)
-				quantum_size = flp2(quantum_size);
-
-			if (quantum_size != node->quantum_size) {
-				pw_log_debug(NAME" %p: latency '%s' quantum %u/%u",
-						node, str, quantum_size, context->defaults.clock_rate);
-				pw_log_info("(%s-%u) latency:%s ->quantum %u/%u", node->name,
-						node->info.id, str, quantum_size,
-						context->defaults.clock_rate);
-				node->quantum_size = quantum_size;
+                if (sscanf(str, "%u/%u", &frac.num, &frac.denom) == 2 && frac.denom != 0) {
+			if (node->latency.num != frac.num || node->latency.denom != frac.denom) {
+				pw_log_info("(%s-%u) latency:%u/%u -> %u/%u", node->name,
+						node->info.id, node->latency.num,
+						node->latency.denom, frac.num, frac.denom);
+				node->latency = frac;
 				recalc_reason = "quantum changed";
 			}
 		}
 	}
 	if ((str = pw_properties_get(node->properties, PW_KEY_NODE_MAX_LATENCY))) {
-		uint32_t num, denom;
-                if (sscanf(str, "%u/%u", &num, &denom) == 2 && denom != 0) {
-			uint32_t max_quantum_size;
-
-			node->max_latency = SPA_FRACTION(num, denom);
-			max_quantum_size = (num * context->defaults.clock_rate / denom);
-			if (context->defaults.clock_power_of_two_quantum)
-				max_quantum_size = flp2(max_quantum_size);
-
-			if (max_quantum_size != node->max_quantum_size) {
-				pw_log_debug(NAME" %p: max latency '%s' quantum %u/%u",
-						node, str, max_quantum_size, context->defaults.clock_rate);
-				pw_log_info("(%s-%u) max latency:%s ->quantum %u/%u", node->name,
-						node->info.id, str, max_quantum_size,
-						context->defaults.clock_rate);
-				node->max_quantum_size = max_quantum_size;
+                if (sscanf(str, "%u/%u", &frac.num, &frac.denom) == 2 && frac.denom != 0) {
+			if (node->max_latency.num != frac.num || node->max_latency.denom != frac.denom) {
+				pw_log_info("(%s-%u) max-latency:%u/%u -> %u/%u", node->name,
+						node->info.id, node->max_latency.num,
+						node->max_latency.denom, frac.num, frac.denom);
+				node->max_latency = frac;
 				recalc_reason = "max quantum changed";
 			}
 		}
 	}
+	str = pw_properties_get(node->properties, PW_KEY_NODE_LOCK_QUANTUM);
+	node->lock_quantum = str ? pw_properties_parse_bool(str) : false;
+
+	if ((str = pw_properties_get(node->properties, PW_KEY_NODE_RATE))) {
+                if (sscanf(str, "%u/%u", &frac.num, &frac.denom) == 2 && frac.denom != 0) {
+			if (node->rate.num != frac.num || node->rate.denom != frac.denom) {
+				pw_log_info("(%s-%u) rate:%u/%u -> %u/%u", node->name,
+						node->info.id, node->rate.num,
+						node->rate.denom, frac.num, frac.denom);
+				node->rate = frac;
+				recalc_reason = "node rate changed";
+			}
+		}
+	}
+	str = pw_properties_get(node->properties, PW_KEY_NODE_LOCK_RATE);
+	node->lock_rate = str ? pw_properties_parse_bool(str) : false;
 
 	pw_log_debug(NAME" %p: driver:%d recalc:%s active:%d", node, node->driver,
 			recalc_reason, node->active);
@@ -952,7 +940,7 @@ static void dump_states(struct pw_impl_node *driver)
 			continue;
 		if (a->status == PW_NODE_ACTIVATION_TRIGGERED ||
 		    a->status == PW_NODE_ACTIVATION_AWAKE) {
-			pw_log_warn("(%s-%u) client too slow! rate:%u/%u pos:%"PRIu64" status:%s",
+			pw_log_info("(%s-%u) client too slow! rate:%u/%u pos:%"PRIu64" status:%s",
 				t->node->name, t->node->info.id,
 				(uint32_t)(cl->rate.num * cl->duration), cl->rate.denom,
 				cl->position, str_status(a->status));
@@ -1089,7 +1077,7 @@ static void node_on_fd_events(struct spa_source *source)
 		if (SPA_UNLIKELY(spa_system_eventfd_read(data_system, this->source.fd, &cmd) < 0))
 			pw_log_warn(NAME" %p: read failed %m", this);
 		else if (SPA_UNLIKELY(cmd > 1))
-			pw_log_warn("(%s-%u) client missed %"PRIu64" wakeups",
+			pw_log_info("(%s-%u) client missed %"PRIu64" wakeups",
 				this->name, this->info.id, cmd - 1);
 
 		pw_log_trace_fp(NAME" %p: got process", this);
@@ -1106,14 +1094,16 @@ static void reset_segment(struct spa_io_segment *seg)
 static void reset_position(struct pw_impl_node *this, struct spa_io_position *pos)
 {
 	uint32_t i;
-	struct defaults *def = &this->context->defaults;
+	struct settings *s = &this->context->settings;
+	uint32_t quantum = s->clock_force_quantum == 0 ? s->clock_quantum : s->clock_force_quantum;
+	uint32_t rate = s->clock_force_rate == 0 ? s->clock_rate : s->clock_force_rate;
 
-	pos->clock.rate = SPA_FRACTION(1, def->clock_rate);
-	pos->clock.duration = def->clock_quantum;
+	pos->clock.rate = SPA_FRACTION(1, rate);
+	pos->clock.duration = quantum;
 	pos->video.flags = SPA_IO_VIDEO_SIZE_VALID;
-	pos->video.size = def->video_size;
+	pos->video.size = s->video_size;
 	pos->video.stride = pos->video.size.width * 16;
-	pos->video.framerate = def->video_rate;
+	pos->video.framerate = s->video_rate;
 	pos->offset = INT64_MIN;
 
 	pos->n_segments = 1;
@@ -1235,8 +1225,7 @@ error_clean:
 		spa_system_close(this->context->data_system, this->source.fd);
 	free(impl);
 error_exit:
-	if (properties)
-		pw_properties_free(properties);
+	pw_properties_free(properties);
 	errno = -res;
 	return NULL;
 }
@@ -1273,8 +1262,7 @@ const struct pw_properties *pw_impl_node_get_properties(struct pw_impl_node *nod
 
 static int update_properties(struct pw_impl_node *node, const struct spa_dict *dict, bool filter)
 {
-	int changed;
-	const char *ignored[] = {
+	static const char * const ignored[] = {
 		PW_KEY_OBJECT_ID,
 		PW_KEY_MODULE_ID,
 		PW_KEY_FACTORY_ID,
@@ -1282,6 +1270,8 @@ static int update_properties(struct pw_impl_node *node, const struct spa_dict *d
 		PW_KEY_DEVICE_ID,
 		NULL
 	};
+
+	int changed;
 
 	changed = pw_properties_update_ignore(node->properties, dict, filter ? ignored : NULL);
 	node->info.props = &node->properties->dict;
@@ -1546,7 +1536,7 @@ static int node_ready(void *data, int status)
 
 		if (SPA_UNLIKELY(state->pending > 0)) {
 			pw_context_driver_emit_incomplete(node->context, node);
-			if (ratelimit_test(&node->rt.rate_limit, a->signal_time)) {
+			if (ratelimit_test(&node->rt.rate_limit, a->signal_time, SPA_LOG_LEVEL_DEBUG)) {
 				pw_log_debug("(%s-%u) graph not finished: state:%p quantum:%"PRIu64
 						" pending %d/%d", node->name, node->info.id,
 						state, a->position.clock.duration,
@@ -1644,7 +1634,7 @@ static int node_xrun(void *data, uint64_t trigger, uint64_t delay, struct spa_po
 	if (da && da != a)
 		update_xrun_stats(da, trigger, delay);
 
-	if (ratelimit_test(&this->rt.rate_limit, a->signal_time)) {
+	if (ratelimit_test(&this->rt.rate_limit, a->signal_time, SPA_LOG_LEVEL_INFO)) {
 		struct spa_fraction rate;
 		if (da) {
 			struct spa_io_clock *cl = &da->position.clock;
@@ -1653,7 +1643,7 @@ static int node_xrun(void *data, uint64_t trigger, uint64_t delay, struct spa_po
 		} else {
 			rate = SPA_FRACTION(0,0);
 		}
-		pw_log_error("(%s-%d) XRun! rate:%u/%u count:%u time:%"PRIu64
+		pw_log_info("(%s-%d) XRun! rate:%u/%u count:%u time:%"PRIu64
 				" delay:%"PRIu64" max:%"PRIu64,
 				this->name, this->info.id,
 				rate.num, rate.denom, a->xrun_count,
@@ -1715,8 +1705,6 @@ void pw_impl_node_add_listener(struct pw_impl_node *node,
  *
  * Remove \a node. This will stop the transfer on the node and
  * free the resources allocated by \a node.
- *
- * \memberof pw_impl_node
  */
 SPA_EXPORT
 void pw_impl_node_destroy(struct pw_impl_node *node)
@@ -2026,6 +2014,7 @@ static void on_state_complete(void *obj, void *data, int res, uint32_t seq)
 	char *error = NULL;
 
 	impl->pending_id = SPA_ID_INVALID;
+	impl->pending_play = false;
 
 	pw_log_debug(NAME" %p: state complete res:%d seq:%d", node, res, seq);
 	if (impl->last_error < 0) {
@@ -2067,8 +2056,6 @@ static void node_activate(struct pw_impl_node *this)
  * \return 0 on success < 0 on error
  *
  * Set the state of \a node to \a state.
- *
- * \memberof pw_impl_node
  */
 SPA_EXPORT
 int pw_impl_node_set_state(struct pw_impl_node *node, enum pw_node_state state)
@@ -2118,6 +2105,18 @@ int pw_impl_node_set_state(struct pw_impl_node *node, enum pw_node_state state)
 
 	if (old != state) {
 		if (impl->pending_id != SPA_ID_INVALID) {
+			pw_log_debug("cancel state from %s to %s to %s",
+				pw_node_state_as_string(node->info.state),
+				pw_node_state_as_string(impl->pending),
+				pw_node_state_as_string(state));
+
+			if (impl->pending == PW_NODE_STATE_RUNNING &&
+			    state < PW_NODE_STATE_RUNNING &&
+			    impl->pending_play) {
+				impl->pending_play = false;
+				spa_node_send_command(node->node,
+					&SPA_NODE_COMMAND_INIT(SPA_NODE_COMMAND_Pause));
+			}
 			pw_work_queue_cancel(impl->work, node, impl->pending_id);
 			node->info.state = impl->pending;
 		}

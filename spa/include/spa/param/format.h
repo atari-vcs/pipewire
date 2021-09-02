@@ -29,6 +29,11 @@
 extern "C" {
 #endif
 
+/**
+ * \addtogroup spa_param
+ * \{
+ */
+
 #include <spa/param/param.h>
 
 /** media type for SPA_TYPE_OBJECT_Format */
@@ -47,6 +52,7 @@ enum spa_media_subtype {
 	SPA_MEDIA_SUBTYPE_unknown,
 	SPA_MEDIA_SUBTYPE_raw,
 	SPA_MEDIA_SUBTYPE_dsp,
+	SPA_MEDIA_SUBTYPE_iec958,	/** S/PDIF */
 
 	SPA_MEDIA_SUBTYPE_START_Audio	= 0x10000,
 	SPA_MEDIA_SUBTYPE_mp3,
@@ -105,6 +111,8 @@ enum spa_format {
 	SPA_FORMAT_AUDIO_channels,	/**< number of audio channels (Int) */
 	SPA_FORMAT_AUDIO_position,	/**< channel positions (Id enum spa_audio_position) */
 
+	SPA_FORMAT_AUDIO_iec958Codec,		/**< codec used (IEC958) (Id enum spa_audio_iec958_codec) */
+
 	/* Video Format keys */
 	SPA_FORMAT_START_Video = 0x20000,
 	SPA_FORMAT_VIDEO_format,		/**< video format (Id enum spa_video_format) */
@@ -139,6 +147,10 @@ enum spa_format {
 
 #define SPA_KEY_FORMAT_DSP		"format.dsp"		/**< a predefined DSP format,
 								  *  Ex. "32 bit float mono audio" */
+
+/**
+ * \}
+ */
 
 #ifdef __cplusplus
 }  /* extern "C" */

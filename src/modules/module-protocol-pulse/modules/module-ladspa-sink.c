@@ -32,13 +32,6 @@
 #include "../module.h"
 #include "registry.h"
 
-#define ERROR_RETURN(str)		\
-	{				\
-		pw_log_error(str);	\
-		res = -EINVAL;		\
-		goto out;		\
-	}
-
 struct module_ladspa_sink_data {
 	struct module *module;
 
@@ -110,9 +103,6 @@ static int module_ladspa_sink_load(struct client *client, struct module *module)
 			&data->mod_listener,
 			&module_events, data);
 
-	pw_log_info("loaded module %p id:%u name:%s", module, module->idx, module->name);
-	module_emit_loaded(module, 0);
-
 	return 0;
 }
 
@@ -120,13 +110,15 @@ static int module_ladspa_sink_unload(struct client *client, struct module *modul
 {
 	struct module_ladspa_sink_data *d = module->user_data;
 
-	pw_log_info("unload module %p id:%u name:%s", module, module->idx, module->name);
-
 	if (d->mod) {
 		spa_hook_remove(&d->mod_listener);
 		pw_impl_module_destroy(d->mod);
 		d->mod = NULL;
 	}
+
+	pw_properties_free(d->capture_props);
+	pw_properties_free(d->playback_props);
+
 	return 0;
 }
 
@@ -193,8 +185,6 @@ struct module *create_module_ladspa_sink(struct impl *impl, const char *argument
 	if ((str = pw_properties_get(props, "sink_name")) != NULL) {
 		pw_properties_set(props, PW_KEY_NODE_NAME, str);
 		pw_properties_set(props, "sink_name", NULL);
-	} else {
-		pw_properties_set(props, PW_KEY_NODE_NAME, "null");
 	}
 	if ((str = pw_properties_get(props, "sink_properties")) != NULL) {
 		module_args_add_props(capture_props, str);
@@ -235,12 +225,9 @@ struct module *create_module_ladspa_sink(struct impl *impl, const char *argument
 
 	return module;
 out:
-	if (props)
-		pw_properties_free(props);
-	if (playback_props)
-		pw_properties_free(playback_props);
-	if (capture_props)
-		pw_properties_free(capture_props);
+	pw_properties_free(props);
+	pw_properties_free(playback_props);
+	pw_properties_free(capture_props);
 	errno = -res;
 	return NULL;
 }

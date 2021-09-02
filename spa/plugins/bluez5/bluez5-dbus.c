@@ -88,7 +88,9 @@ struct spa_bt_monitor {
 	struct spa_dict enabled_codecs;
 
 	unsigned int connection_info_supported:1;
-	unsigned int enable_sbc_xq:1;
+
+	struct spa_bt_quirks *quirks;
+
 	unsigned int backend_native_registered:1;
 	unsigned int backend_ofono_registered:1;
 	unsigned int backend_hsphfpd_registered:1;
@@ -141,7 +143,8 @@ struct spa_bt_a2dp_codec_switch {
 };
 
 #define DEFAULT_RECONNECT_PROFILES SPA_BT_PROFILE_NULL
-#define DEFAULT_HW_VOLUME_PROFILES (SPA_BT_PROFILE_HEADSET_AUDIO_GATEWAY | SPA_BT_PROFILE_A2DP_SOURCE)
+#define DEFAULT_HW_VOLUME_PROFILES (SPA_BT_PROFILE_HEADSET_AUDIO_GATEWAY | SPA_BT_PROFILE_HEADSET_HEAD_UNIT | \
+					SPA_BT_PROFILE_A2DP_SOURCE | SPA_BT_PROFILE_A2DP_SINK)
 
 #define BT_DEVICE_DISCONNECTED	0
 #define BT_DEVICE_CONNECTED	1
@@ -163,6 +166,9 @@ static int spa_bt_transport_stop_volume_timer(struct spa_bt_transport *transport
 static int spa_bt_transport_start_volume_timer(struct spa_bt_transport *transport);
 static int spa_bt_transport_stop_release_timer(struct spa_bt_transport *transport);
 static int spa_bt_transport_start_release_timer(struct spa_bt_transport *transport);
+
+static int device_start_timer(struct spa_bt_device *device);
+static int device_stop_timer(struct spa_bt_device *device);
 
 // Working with BlueZ Battery Provider.
 // Developed using https://github.com/dgreid/adhd/commit/655b58f as an example of DBus calls.
@@ -394,7 +400,8 @@ static int a2dp_codec_to_endpoint(const struct a2dp_codec *codec,
 				   const char * endpoint,
 				   char** object_path)
 {
-	*object_path = spa_aprintf("%s/%s", endpoint, codec->name);
+	*object_path = spa_aprintf("%s/%s", endpoint,
+		codec->endpoint_name ? codec->endpoint_name : codec->name);
 	if (*object_path == NULL)
 		return -errno;
 	return 0;
@@ -402,19 +409,21 @@ static int a2dp_codec_to_endpoint(const struct a2dp_codec *codec,
 
 static const struct a2dp_codec *a2dp_endpoint_to_codec(const char *endpoint)
 {
-	const char *codec_name;
+	const char *ep_name;
 	int i;
 
-	if (strstr(endpoint, A2DP_SINK_ENDPOINT "/") == endpoint)
-		codec_name = endpoint + strlen(A2DP_SINK_ENDPOINT "/");
-	else if (strstr(endpoint, A2DP_SOURCE_ENDPOINT "/") == endpoint)
-		codec_name = endpoint + strlen(A2DP_SOURCE_ENDPOINT "/");
+	if (spa_strstartswith(endpoint, A2DP_SINK_ENDPOINT "/"))
+		ep_name = endpoint + strlen(A2DP_SINK_ENDPOINT "/");
+	else if (spa_strstartswith(endpoint, A2DP_SOURCE_ENDPOINT "/"))
+		ep_name = endpoint + strlen(A2DP_SOURCE_ENDPOINT "/");
 	else
 		return NULL;
 
 	for (i = 0; a2dp_codecs[i]; i++) {
 		const struct a2dp_codec *codec = a2dp_codecs[i];
-		if (spa_streq(codec->name, codec_name))
+		const char *codec_ep_name =
+			codec->endpoint_name ? codec->endpoint_name : codec->name;
+		if (spa_streq(ep_name, codec_ep_name))
 			return codec;
 	}
 	return NULL;
@@ -423,9 +432,9 @@ static const struct a2dp_codec *a2dp_endpoint_to_codec(const char *endpoint)
 static int a2dp_endpoint_to_profile(const char *endpoint)
 {
 
-	if (strstr(endpoint, A2DP_SINK_ENDPOINT "/") == endpoint)
+	if (spa_strstartswith(endpoint, A2DP_SINK_ENDPOINT "/"))
 		return SPA_BT_PROFILE_A2DP_SOURCE;
-	else if (strstr(endpoint, A2DP_SOURCE_ENDPOINT "/") == endpoint)
+	else if (spa_strstartswith(endpoint, A2DP_SOURCE_ENDPOINT "/"))
 		return SPA_BT_PROFILE_A2DP_SINK;
 	else
 		return SPA_BT_PROFILE_NULL;
@@ -433,10 +442,6 @@ static int a2dp_endpoint_to_profile(const char *endpoint)
 
 static bool is_a2dp_codec_enabled(struct spa_bt_monitor *monitor, const struct a2dp_codec *codec)
 {
-	if (!monitor->enable_sbc_xq && codec->feature_flag != NULL &&
-	    spa_streq(codec->feature_flag, "sbc-xq"))
-		return false;
-
 	return spa_dict_lookup(&monitor->enabled_codecs, codec->name) != NULL;
 }
 
@@ -521,6 +526,38 @@ static bool check_iter_signature(DBusMessageIter *it, const char *sig)
 	return res;
 }
 
+static int parse_modalias(const char *modalias, uint16_t *source, uint16_t *vendor,
+		uint16_t *product, uint16_t *version)
+{
+	char *pos;
+	unsigned int src, i, j, k;
+
+	if (strncmp(modalias, "bluetooth:", strlen("bluetooth:")) == 0)
+		src = SOURCE_ID_BLUETOOTH;
+	else if (strncmp(modalias, "usb:", strlen("usb:")) == 0)
+		src = SOURCE_ID_USB;
+	else
+		return -EINVAL;
+
+	pos = strchr(modalias, ':');
+	if (pos == NULL)
+		return -EINVAL;
+
+	if (sscanf(pos + 1, "v%04Xp%04Xd%04X", &i, &j, &k) != 3)
+		return -EINVAL;
+
+	/* Ignore BlueZ placeholder value */
+	if (src == SOURCE_ID_USB && i == 0x1d6b && j == 0x0246)
+		return -ENXIO;
+
+	*source = src;
+	*vendor = i;
+	*product = j;
+	*version = k;
+
+	return 0;
+}
+
 static int adapter_update_props(struct spa_bt_adapter *adapter,
 				DBusMessageIter *props_iter,
 				DBusMessageIter *invalidated_iter)
@@ -557,6 +594,14 @@ static int adapter_update_props(struct spa_bt_adapter *adapter,
 			else if (spa_streq(key, "Address")) {
 				free(adapter->address);
 				adapter->address = strdup(value);
+			}
+			else if (spa_streq(key, "Modalias")) {
+				int ret;
+				ret = parse_modalias(value, &adapter->source_id, &adapter->vendor_id,
+						&adapter->product_id, &adapter->version_id);
+				if (ret < 0)
+					spa_log_debug(monitor->log, "adapter %p: %s=%s ignored: %s",
+							adapter, key, value, spa_strerror(ret));
 			}
 		}
 		else if (type == DBUS_TYPE_UINT32) {
@@ -613,6 +658,63 @@ static int adapter_update_props(struct spa_bt_adapter *adapter,
 	return 0;
 }
 
+static int adapter_init_bus_type(struct spa_bt_monitor *monitor, struct spa_bt_adapter *d)
+{
+	char path[1024], buf[1024];
+	const char *str;
+	ssize_t res = -EINVAL;
+
+	d->bus_type = BUS_TYPE_OTHER;
+
+	str = strrchr(d->path, '/');  /* hciXX */
+	if (str == NULL)
+		return -ENOENT;
+
+	snprintf(path, sizeof(path), "/sys/class/bluetooth/%s/device/subsystem", str);
+	if ((res = readlink(path, buf, sizeof(buf)-1)) < 0)
+		return -errno;
+	buf[res] = '\0';
+
+	str = strrchr(buf, '/');
+	if (str && spa_streq(str, "/usb"))
+		d->bus_type = BUS_TYPE_USB;
+	return 0;
+}
+
+static int adapter_init_modalias(struct spa_bt_monitor *monitor, struct spa_bt_adapter *d)
+{
+	char path[1024];
+	FILE *f = NULL;
+	int vendor_id, product_id;
+	const char *str;
+	int res = -EINVAL;
+
+	/* Lookup vendor/product id for the device, if present */
+	str = strrchr(d->path, '/');  /* hciXX */
+	if (str == NULL)
+		goto fail;
+	snprintf(path, sizeof(path), "/sys/class/bluetooth/%s/device/modalias", str);
+	if ((f = fopen(path, "rb")) == NULL) {
+		res = -errno;
+		goto fail;
+	}
+	if (fscanf(f, "usb:v%04Xp%04X",  &vendor_id, &product_id) != 2)
+		goto fail;
+	d->source_id = SOURCE_ID_USB;
+	d->vendor_id = vendor_id;
+	d->product_id = product_id;
+	fclose(f);
+
+	spa_log_debug(monitor->log, "adapter %p: usb vendor:%04x product:%04x",
+			d, vendor_id, product_id);
+	return 0;
+
+fail:
+	if (f)
+		fclose(f);
+	return res;
+}
+
 static struct spa_bt_adapter *adapter_create(struct spa_bt_monitor *monitor, const char *path)
 {
 	struct spa_bt_adapter *d;
@@ -625,6 +727,9 @@ static struct spa_bt_adapter *adapter_create(struct spa_bt_monitor *monitor, con
 	d->path = strdup(path);
 
 	spa_list_prepend(&monitor->adapter_list, &d->link);
+
+	adapter_init_bus_type(monitor, d);
+	adapter_init_modalias(monitor, d);
 
 	return d;
 }
@@ -690,6 +795,12 @@ static int device_stop_timer(struct spa_bt_device *device);
 
 static void a2dp_codec_switch_free(struct spa_bt_a2dp_codec_switch *sw);
 
+static void device_clear_sub(struct spa_bt_device *device)
+{
+	battery_remove(device);
+	spa_bt_device_release_transports(device);
+}
+
 static void device_free(struct spa_bt_device *device)
 {
 	struct spa_bt_remote_endpoint *ep, *tep;
@@ -701,7 +812,7 @@ static void device_free(struct spa_bt_device *device)
 
 	spa_bt_device_emit_destroy(device);
 
-	battery_remove(device);
+	device_clear_sub(device);
 	device_stop_timer(device);
 
 	if (device->added) {
@@ -736,116 +847,34 @@ static void device_free(struct spa_bt_device *device)
 	free(device);
 }
 
-static int device_connected_old(struct spa_bt_monitor *monitor, struct spa_bt_device *device, int status)
+int spa_bt_format_vendor_product_id(uint16_t source_id, uint16_t vendor_id, uint16_t product_id,
+		char *vendor_str, int vendor_str_size, char *product_str, int product_str_size)
 {
-	struct spa_device_object_info info;
-	char dev[32], name[128], class[16];
-	struct spa_dict_item items[20];
-	uint32_t n_items = 0;
-	bool connection_changed;
+	char *source_str;
 
-	if (status == BT_DEVICE_INIT)
-		return 0;
-
-	connection_changed = status ^ device->connected;
-	device->connected = status;
-
-	if (device->connected) {
-		device->added = true;
-	} else if (!device->added || !connection_changed) {
-		return 0;
-	}
-
-	if ((device->connected_profiles != 0) ^ device->connected) {
-		spa_log_error(monitor->log,
-			"unexpected call, connected_profiles:%08x connected:%d",
-			device->connected_profiles, device->connected);
+	switch (source_id) {
+	case SOURCE_ID_USB:
+		source_str = "usb";
+		break;
+	case SOURCE_ID_BLUETOOTH:
+		source_str = "bluetooth";
+		break;
+	default:
 		return -EINVAL;
 	}
 
-	if (device->connected) {
-		info = SPA_DEVICE_OBJECT_INFO_INIT();
-		info.type = SPA_TYPE_INTERFACE_Device;
-		info.factory_name = SPA_NAME_API_BLUEZ5_DEVICE;
-		info.change_mask = SPA_DEVICE_OBJECT_CHANGE_MASK_FLAGS |
-			SPA_DEVICE_OBJECT_CHANGE_MASK_PROPS;
-		info.flags = 0;
-
-		items[n_items++] = SPA_DICT_ITEM_INIT(SPA_KEY_DEVICE_API, "bluez5");
-		items[n_items++] = SPA_DICT_ITEM_INIT(SPA_KEY_DEVICE_BUS, "bluetooth");
-		items[n_items++] = SPA_DICT_ITEM_INIT(SPA_KEY_MEDIA_CLASS, "Audio/Device");
-		snprintf(name, sizeof(name), "bluez_card.%s", device->address);
-		items[n_items++] = SPA_DICT_ITEM_INIT(SPA_KEY_DEVICE_NAME, name);
-		items[n_items++] = SPA_DICT_ITEM_INIT(SPA_KEY_DEVICE_DESCRIPTION, device->alias);
-		items[n_items++] = SPA_DICT_ITEM_INIT(SPA_KEY_DEVICE_ALIAS, device->name);
-		items[n_items++] = SPA_DICT_ITEM_INIT(SPA_KEY_DEVICE_FORM_FACTOR,
-				spa_bt_form_factor_name(
-					spa_bt_form_factor_from_class(device->bluetooth_class)));
-		items[n_items++] = SPA_DICT_ITEM_INIT(SPA_KEY_DEVICE_STRING, device->address);
-		items[n_items++] = SPA_DICT_ITEM_INIT(SPA_KEY_API_BLUEZ5_ICON, device->icon);
-		items[n_items++] = SPA_DICT_ITEM_INIT(SPA_KEY_API_BLUEZ5_PATH, device->path);
-		items[n_items++] = SPA_DICT_ITEM_INIT(SPA_KEY_API_BLUEZ5_ADDRESS, device->address);
-		snprintf(dev, sizeof(dev), "pointer:%p", device);
-		items[n_items++] = SPA_DICT_ITEM_INIT(SPA_KEY_API_BLUEZ5_DEVICE, dev);
-		snprintf(class, sizeof(class), "0x%06x", device->bluetooth_class);
-		items[n_items++] = SPA_DICT_ITEM_INIT(SPA_KEY_API_BLUEZ5_CLASS, class);
-
-		info.props = &SPA_DICT_INIT(items, n_items);
-		spa_device_emit_object_info(&monitor->hooks, device->id, &info);
-	} else {
-		device->added = false;
-		battery_remove(device);
-		spa_bt_device_release_transports(device);
-		spa_device_emit_object_info(&monitor->hooks, device->id, NULL);
-	}
-
+	spa_scnprintf(vendor_str, vendor_str_size, "%s:%04x", source_str, (unsigned int)vendor_id);
+	spa_scnprintf(product_str, product_str_size, "%04x", (unsigned int)product_id);
 	return 0;
 }
 
-enum {
-	BT_DEVICE_RECONNECT_INIT = 0,
-	BT_DEVICE_RECONNECT_PROFILE,
-	BT_DEVICE_RECONNECT_STOP
-};
-
-static int device_connected(struct spa_bt_monitor *monitor, struct spa_bt_device *device, int status)
+static void emit_device_info(struct spa_bt_monitor *monitor,
+		struct spa_bt_device *device, bool with_connection)
 {
 	struct spa_device_object_info info;
-	char dev[32], name[128], class[16];
-	struct spa_dict_item items[20];
+	char dev[32], name[128], class[16], vendor_id[64], product_id[64], product_id_tot[67];
+	struct spa_dict_item items[23];
 	uint32_t n_items = 0;
-	bool connection_changed, init = status == BT_DEVICE_INIT;
-	status = init ? 0 : status;
-
-	device->reconnect_state = status ? BT_DEVICE_RECONNECT_STOP : BT_DEVICE_RECONNECT_PROFILE;
-
-	if (!monitor->connection_info_supported) {
-		return device_connected_old(monitor, device, status);
-	}
-
-	connection_changed = status ^ device->connected;
-	device->connected = status;
-
-	if (init) {
-		device->added = true;
-	} else if (!device->added || !connection_changed) {
-		return 0;
-	}
-
-	if ((device->connected_profiles != 0) ^ device->connected) {
-		spa_log_error(monitor->log,
-			"unexpected call, connected_profiles:%08x connected:%d",
-			device->connected_profiles, device->connected);
-		return -EINVAL;
-	}
-
-	if (!init) {
-		spa_bt_device_emit_connected(device, device->connected);
-		if (!device->connected) {
-			battery_remove(device);
-			spa_bt_device_release_transports(device);
-		}
-	}
 
 	info = SPA_DEVICE_OBJECT_INFO_INIT();
 	info.type = SPA_TYPE_INTERFACE_Device;
@@ -861,6 +890,13 @@ static int device_connected(struct spa_bt_monitor *monitor, struct spa_bt_device
 	items[n_items++] = SPA_DICT_ITEM_INIT(SPA_KEY_DEVICE_NAME, name);
 	items[n_items++] = SPA_DICT_ITEM_INIT(SPA_KEY_DEVICE_DESCRIPTION, device->alias);
 	items[n_items++] = SPA_DICT_ITEM_INIT(SPA_KEY_DEVICE_ALIAS, device->name);
+	if (spa_bt_format_vendor_product_id(
+				device->source_id, device->vendor_id, device->product_id,
+				vendor_id, sizeof(vendor_id), product_id, sizeof(product_id)) == 0) {
+		snprintf(product_id_tot, sizeof(product_id_tot), "0x%s", product_id);
+		items[n_items++] = SPA_DICT_ITEM_INIT(SPA_KEY_DEVICE_VENDOR_ID, vendor_id);
+		items[n_items++] = SPA_DICT_ITEM_INIT(SPA_KEY_DEVICE_PRODUCT_ID, product_id_tot);
+	}
 	items[n_items++] = SPA_DICT_ITEM_INIT(SPA_KEY_DEVICE_FORM_FACTOR,
 			spa_bt_form_factor_name(
 				spa_bt_form_factor_from_class(device->bluetooth_class)));
@@ -872,15 +908,114 @@ static int device_connected(struct spa_bt_monitor *monitor, struct spa_bt_device
 	items[n_items++] = SPA_DICT_ITEM_INIT(SPA_KEY_API_BLUEZ5_DEVICE, dev);
 	snprintf(class, sizeof(class), "0x%06x", device->bluetooth_class);
 	items[n_items++] = SPA_DICT_ITEM_INIT(SPA_KEY_API_BLUEZ5_CLASS, class);
-	items[n_items++] = SPA_DICT_ITEM_INIT(
-				SPA_KEY_API_BLUEZ5_CONNECTION,
-				device->connected ? "connected": "disconnected");
+
+	if (with_connection) {
+		items[n_items++] = SPA_DICT_ITEM_INIT(SPA_KEY_API_BLUEZ5_CONNECTION,
+					device->connected ? "connected": "disconnected");
+	}
 
 	info.props = &SPA_DICT_INIT(items, n_items);
 	spa_device_emit_object_info(&monitor->hooks, device->id, &info);
+}
+
+static int device_connected_old(struct spa_bt_monitor *monitor,
+		struct spa_bt_device *device, int connected)
+{
+
+	if (connected == BT_DEVICE_INIT)
+		return 0;
+
+	device->connected = connected;
+
+	if (device->connected) {
+		emit_device_info(monitor, device, false);
+		device->added = true;
+	} else {
+		if (!device->added)
+			return 0;
+
+		device_clear_sub(device);
+		spa_device_emit_object_info(&monitor->hooks, device->id, NULL);
+		device->added = false;
+	}
 
 	return 0;
 }
+
+enum {
+	BT_DEVICE_RECONNECT_INIT = 0,
+	BT_DEVICE_RECONNECT_PROFILE,
+	BT_DEVICE_RECONNECT_STOP
+};
+
+static int device_connected(struct spa_bt_monitor *monitor,
+		struct spa_bt_device *device, int status)
+{
+	bool connected, init = (status == BT_DEVICE_INIT);
+
+	connected = init ? 0 : status;
+
+	if (!init) {
+		device->reconnect_state =
+			connected ? BT_DEVICE_RECONNECT_STOP
+				  : BT_DEVICE_RECONNECT_PROFILE;
+	}
+
+	if ((device->connected_profiles != 0) ^ connected) {
+		spa_log_error(monitor->log,
+			"device %p: unexpected call, connected_profiles:%08x connected:%d",
+			device, device->connected_profiles, device->connected);
+		return -EINVAL;
+	}
+
+	if (!monitor->connection_info_supported)
+		return device_connected_old(monitor, device, status);
+
+	if (init) {
+		device->connected = connected;
+	} else {
+		if (!device->added || !(connected ^ device->connected))
+			return 0;
+
+		device->connected = connected;
+		spa_bt_device_emit_connected(device, device->connected);
+
+		if (!device->connected)
+			device_clear_sub(device);
+	}
+
+	emit_device_info(monitor, device, true);
+	device->added = true;
+
+	return 0;
+}
+
+/*
+ * Add profile to device based on bluez actions
+ * (update property UUIDs, trigger profile handlers),
+ * in case UUIDs is empty on signal InterfaceAdded for
+ * org.bluez.Device1. And emit device info if there is
+ * at least 1 profile on device. This should be called
+ * before any device setting accessing.
+ */
+int spa_bt_device_add_profile(struct spa_bt_device *device, enum spa_bt_profile profile)
+{
+	struct spa_bt_monitor *monitor = device->monitor;
+
+	if (profile && (device->profiles & profile) == 0) {
+		spa_log_info(monitor->log, "device %p: add new profile %08x", device, profile);
+		device->profiles |= profile;
+	}
+
+	if (!device->added && device->profiles) {
+		device_connected(monitor, device, BT_DEVICE_INIT);
+		if (device->reconnect_state == BT_DEVICE_RECONNECT_INIT)
+			device_start_timer(device);
+	}
+
+	return 0;
+}
+
 
 static int device_try_connect_profile(struct spa_bt_device *device,
                                       const char *profile_uuid)
@@ -950,9 +1085,6 @@ static int reconnect_device_profiles(struct spa_bt_device *device)
 
 #define DEVICE_RECONNECT_TIMEOUT_SEC 2
 #define DEVICE_PROFILE_TIMEOUT_SEC 3
-
-static int device_start_timer(struct spa_bt_device *device);
-static int device_stop_timer(struct spa_bt_device *device);
 
 static void device_timer_event(struct spa_source *source)
 {
@@ -1082,6 +1214,22 @@ int spa_bt_device_connect_profile(struct spa_bt_device *device, enum spa_bt_prof
 	return 0;
 }
 
+static void device_update_hw_volume_profiles(struct spa_bt_device *device)
+{
+	struct spa_bt_monitor *monitor = device->monitor;
+	uint32_t bt_features = 0;
+
+	if (!monitor->quirks)
+		return;
+
+	if (spa_bt_quirks_get_features(monitor->quirks, device->adapter, device, &bt_features) != 0)
+		return;
+
+	if (!(bt_features & SPA_BT_FEATURE_HW_VOLUME))
+		device->hw_volume_profiles = 0;
+
+	spa_log_debug(monitor->log, NAME ": hw-volume-profiles:%08x", (int)device->hw_volume_profiles);
+}
 
 static int device_update_props(struct spa_bt_device *device,
 			       DBusMessageIter *props_iter,
@@ -1132,6 +1280,14 @@ static int device_update_props(struct spa_bt_device *device,
 			else if (spa_streq(key, "Icon")) {
 				free(device->icon);
 				device->icon = strdup(value);
+			}
+			else if (spa_streq(key, "Modalias")) {
+				int ret;
+				ret = parse_modalias(value, &device->source_id, &device->vendor_id,
+						&device->product_id, &device->version_id);
+				if (ret < 0)
+					spa_log_debug(monitor->log, "device %p: %s=%s ignored: %s",
+							device, key, value, spa_strerror(ret));
 			}
 		}
 		else if (type == DBUS_TYPE_UINT32) {
@@ -1226,6 +1382,7 @@ static int device_update_props(struct spa_bt_device *device,
 
 bool spa_bt_device_supports_a2dp_codec(struct spa_bt_device *device, const struct a2dp_codec *codec)
 {
+	struct spa_bt_monitor *monitor = device->monitor;
 	struct spa_bt_remote_endpoint *ep;
 
 	if (!is_a2dp_codec_enabled(device->monitor, codec))
@@ -1234,6 +1391,14 @@ bool spa_bt_device_supports_a2dp_codec(struct spa_bt_device *device, const struc
 	if (!device->adapter->application_registered) {
 		/* Codec switching not supported: only plain SBC allowed */
 		return (codec->codec_id == A2DP_CODEC_SBC && spa_streq(codec->name, "sbc"));
+	}
+
+	if (codec->id == SPA_BLUETOOTH_AUDIO_CODEC_SBC_XQ) {
+		uint32_t bt_features = (uint32_t)-1;
+		if (monitor->quirks)
+			spa_bt_quirks_get_features(monitor->quirks, device->adapter, device, &bt_features);
+		if (!(bt_features & SPA_BT_FEATURE_SBC_XQ))
+			return false;
 	}
 
 	spa_list_for_each(ep, &device->remote_endpoint_list, device_link) {
@@ -1768,24 +1933,23 @@ int64_t spa_bt_transport_get_delay_nsec(struct spa_bt_transport *t)
 	if (t->a2dp_codec == NULL)
 		return 30 * SPA_NSEC_PER_MSEC;
 
-	switch (t->a2dp_codec->codec_id) {
-	case A2DP_CODEC_SBC:
+	switch (t->a2dp_codec->id) {
+	case SPA_BLUETOOTH_AUDIO_CODEC_SBC:
+	case SPA_BLUETOOTH_AUDIO_CODEC_SBC_XQ:
 		return 200 * SPA_NSEC_PER_MSEC;
-	case A2DP_CODEC_MPEG24:
+	case SPA_BLUETOOTH_AUDIO_CODEC_MPEG:
+	case SPA_BLUETOOTH_AUDIO_CODEC_AAC:
 		return 200 * SPA_NSEC_PER_MSEC;
-	case A2DP_CODEC_VENDOR:
-	{
-		uint32_t vendor_id = t->a2dp_codec->vendor.vendor_id;
-		uint16_t codec_id = t->a2dp_codec->vendor.codec_id;
-
-		if (vendor_id == APTX_VENDOR_ID && codec_id == APTX_CODEC_ID)
-			return 150 * SPA_NSEC_PER_MSEC;
-		if (vendor_id == APTX_HD_VENDOR_ID && codec_id == APTX_HD_CODEC_ID)
-			return 150 * SPA_NSEC_PER_MSEC;
-		if (vendor_id == LDAC_VENDOR_ID && codec_id == LDAC_CODEC_ID)
-			return 175 * SPA_NSEC_PER_MSEC;
-		break;
-	}
+	case SPA_BLUETOOTH_AUDIO_CODEC_APTX:
+	case SPA_BLUETOOTH_AUDIO_CODEC_APTX_HD:
+		return 150 * SPA_NSEC_PER_MSEC;
+	case SPA_BLUETOOTH_AUDIO_CODEC_LDAC:
+		return 175 * SPA_NSEC_PER_MSEC;
+	case SPA_BLUETOOTH_AUDIO_CODEC_APTX_LL:
+	case SPA_BLUETOOTH_AUDIO_CODEC_APTX_LL_DUPLEX:
+	case SPA_BLUETOOTH_AUDIO_CODEC_FASTSTREAM:
+	case SPA_BLUETOOTH_AUDIO_CODEC_FASTSTREAM_DUPLEX:
+		return 40 * SPA_NSEC_PER_MSEC;
 	default:
 		break;
 	};
@@ -1909,6 +2073,7 @@ static int transport_update_props(struct spa_bt_transport *transport,
 			spa_log_debug(monitor->log, "transport %p: %s=%02x", transport, key, value);
 
 			transport->delay = value;
+			spa_bt_transport_emit_delay_changed(transport);
 		}
 	      next:
 		dbus_message_iter_next(props_iter);
@@ -2375,7 +2540,7 @@ static int a2dp_codec_switch_cmp(const void *a, const void *b)
 }
 
 /* Ensure there's a transport for at least one of the listed codecs */
-int spa_bt_device_ensure_a2dp_codec(struct spa_bt_device *device, const struct a2dp_codec **codecs)
+int spa_bt_device_ensure_a2dp_codec(struct spa_bt_device *device, const struct a2dp_codec * const *codecs)
 {
 	struct spa_bt_a2dp_codec_switch *sw;
 	struct spa_bt_remote_endpoint *ep;
@@ -2534,9 +2699,13 @@ static DBusHandlerResult endpoint_set_configuration(DBusConnection *conn,
 	is_new = transport == NULL;
 
 	if (is_new) {
-		transport = spa_bt_transport_create(monitor, strdup(transport_path), 0);
-		if (transport == NULL)
+		char *tpath = strdup(transport_path);
+
+		transport = spa_bt_transport_create(monitor, tpath, 0);
+		if (transport == NULL) {
+			free(tpath);
 			return DBUS_HANDLER_RESULT_NEED_MEMORY;
+		}
 
 		spa_bt_transport_set_implementation(transport, &transport_impl, transport);
 
@@ -2554,6 +2723,7 @@ static DBusHandlerResult endpoint_set_configuration(DBusConnection *conn,
 		transport->volumes[i].hw_volume_max = SPA_BT_VOLUME_A2DP_MAX;
 	}
 
+	transport->profile = profile;
 	transport->a2dp_codec = codec;
 	transport_update_props(transport, &it[1], NULL);
 
@@ -2561,6 +2731,8 @@ static DBusHandlerResult endpoint_set_configuration(DBusConnection *conn,
 		spa_log_warn(monitor->log, "no device found for transport");
 		return DBUS_HANDLER_RESULT_NOT_YET_HANDLED;
 	}
+	spa_bt_device_add_profile(transport->device, transport->profile);
+
 	if (is_new)
 		spa_list_append(&transport->device->transport_list, &transport->device_link);
 
@@ -2873,7 +3045,7 @@ static int adapter_register_endpoints(struct spa_bt_adapter *a)
 
 	if (!a->endpoints_registered) {
 		/* Should never happen as SBC support is always enabled */
-		spa_log_error(monitor->log, "Broken Pipewire build - unable to locate SBC codec");
+		spa_log_error(monitor->log, "Broken PipeWire build - unable to locate SBC codec");
 		err = -ENOSYS;
 	}
 
@@ -3160,17 +3332,13 @@ static void interface_added(struct spa_bt_monitor *monitor,
 		}
 
 		device_update_props(d, props_iter, NULL);
-		/* We only care about audio devices. */
-		if (d->profiles == 0) {
-			device_free(d);
-			return;
-		}
+		d->reconnect_state = BT_DEVICE_RECONNECT_INIT;
+
+		device_update_hw_volume_profiles(d);
 
 		/* Trigger bluez device creation before bluez profile negotiation started so that
 		 * profile connection handlers can receive per-device settings during profile negotiation. */
-		device_connected(monitor, d, BT_DEVICE_INIT);
-		d->reconnect_state = BT_DEVICE_RECONNECT_INIT;
-		device_start_timer(d);
+		spa_bt_device_add_profile(d, SPA_BT_PROFILE_NULL);
 	}
 	else if (spa_streq(interface_name, BLUEZ_MEDIA_ENDPOINT_INTERFACE)) {
 		struct spa_bt_remote_endpoint *ep;
@@ -3490,6 +3658,7 @@ static DBusHandlerResult filter_cb(DBusConnection *bus, DBusMessage *m, void *us
 			spa_log_debug(monitor->log, "Properties changed in device %s", path);
 
 			device_update_props(d, &it[1], NULL);
+			spa_bt_device_add_profile(d, SPA_BT_PROFILE_NULL);
 		}
 		else if (spa_streq(iface, BLUEZ_MEDIA_ENDPOINT_INTERFACE)) {
 			struct spa_bt_remote_endpoint *ep;
@@ -3690,6 +3859,7 @@ static int impl_clear(struct spa_handle *handle)
 	free((void*)monitor->enabled_codecs.items);
 	spa_zero(monitor->enabled_codecs);
 
+	dbus_connection_unref(monitor->conn);
 	spa_dbus_connection_destroy(monitor->dbus_connection);
 	monitor->dbus_connection = NULL;
 	monitor->conn = NULL;
@@ -3697,10 +3867,11 @@ static int impl_clear(struct spa_handle *handle)
 	monitor->objects_listed = false;
 
 	monitor->connection_info_supported = false;
-	monitor->enable_sbc_xq = false;
 	monitor->backend_native_registered = false;
 	monitor->backend_ofono_registered = false;
 	monitor->backend_hsphfpd_registered = false;
+
+	spa_bt_quirks_destroy(monitor->quirks);
 
 	return 0;
 }
@@ -3846,12 +4017,29 @@ impl_init(const struct spa_handle_factory *factory,
 		return -EINVAL;
 	}
 
+	this->quirks = spa_bt_quirks_create(info, this->log);
+	if (this->quirks == NULL) {
+		spa_log_error(this->log, NAME ": failed to parse quirk table");
+		return -EINVAL;
+	}
+
 	this->dbus_connection = spa_dbus_get_connection(this->dbus, SPA_DBUS_TYPE_SYSTEM);
 	if (this->dbus_connection == NULL) {
 		spa_log_error(this->log, "no dbus connection");
 		return -EIO;
 	}
 	this->conn = spa_dbus_connection_get(this->dbus_connection);
+	if (this->conn == NULL) {
+		spa_log_error(this->log, "failed to get dbus connection");
+		spa_dbus_connection_destroy(this->dbus_connection);
+		this->dbus_connection = NULL;
+		return -EIO;
+	}
+
+	/* XXX: We should handle spa_dbus reconnecting, but we don't, so ref
+	 * XXX: the handle so that we can keep it if spa_dbus unrefs it.
+	 */
+	dbus_connection_ref(this->conn);
 
 	spa_hook_list_init(&this->hooks);
 
@@ -3886,17 +4074,13 @@ impl_init(const struct spa_handle_factory *factory,
 		if ((str = spa_dict_lookup(info, "bluez5.default.channels")) != NULL &&
 		    ((tmp =  atoi(str)) > 0))
 			this->default_audio_info.channels = tmp;
-
-		if ((str = spa_dict_lookup(info, "bluez5.sbc-xq-support")) != NULL &&
-		    spa_atob(str))
-			this->enable_sbc_xq = true;
 	}
 
 	register_media_application(this);
 
-	this->backend_native = backend_native_new(this, this->conn, info, support, n_support);
-	this->backend_ofono = backend_ofono_new(this, this->conn, info, support, n_support);
-	this->backend_hsphfpd = backend_hsphfpd_new(this, this->conn, info, support, n_support);
+	this->backend_native = backend_native_new(this, this->conn, info, this->quirks, support, n_support);
+	this->backend_ofono = backend_ofono_new(this, this->conn, info, this->quirks, support, n_support);
+	this->backend_hsphfpd = backend_hsphfpd_new(this, this->conn, info, this->quirks, support, n_support);
 
 	if (this->backend_ofono && spa_bt_backend_register_profiles(this->backend_ofono) == 0)
 		this->backend_ofono_registered = true;

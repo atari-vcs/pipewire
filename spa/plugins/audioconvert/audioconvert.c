@@ -128,6 +128,7 @@ struct impl {
 static void emit_node_info(struct impl *this, bool full)
 {
 	uint32_t i;
+	uint64_t old = full ? this->info.change_mask : 0;
 
 	if (this->add_listener)
 		return;
@@ -144,7 +145,7 @@ static void emit_node_info(struct impl *this, bool full)
 			}
 		}
 		spa_node_emit_info(&this->hooks, &this->info);
-		this->info.change_mask = 0;
+		this->info.change_mask = old;
 	}
 }
 
@@ -556,6 +557,7 @@ static int impl_node_set_io(void *object, uint32_t id, void *data, size_t size)
 	switch (id) {
 	case SPA_IO_Position:
 		res = spa_node_set_io(this->resample, id, data, size);
+		res = spa_node_set_io(this->channelmix, id, data, size);
 		res = spa_node_set_io(this->fmt[0], id, data, size);
 		res = spa_node_set_io(this->fmt[1], id, data, size);
 		break;
@@ -578,16 +580,20 @@ static void fmt_input_port_info(void *data,
 		const struct spa_port_info *info)
 {
 	struct impl *this = data;
+	bool is_monitor = IS_MONITOR_PORT(this, direction, port);
 
 	if (this->fmt_removing[direction])
 		info = NULL;
+	if (is_monitor && this->fmt_removing[SPA_DIRECTION_INPUT])
+		info = NULL;
 
-	if (direction == SPA_DIRECTION_INPUT ||
-	    IS_MONITOR_PORT(this, direction, port))
+	spa_log_debug(this->log, "%p: %d.%d info", this, direction, port);
+
+	if (direction == SPA_DIRECTION_INPUT || is_monitor)
 		spa_node_emit_port_info(&this->hooks, direction, port, info);
 }
 
-static struct spa_node_events fmt_input_events = {
+static const struct spa_node_events fmt_input_events = {
 	SPA_VERSION_NODE_EVENTS,
 	.port_info = fmt_input_port_info,
 	.result = on_node_result,
@@ -602,11 +608,13 @@ static void fmt_output_port_info(void *data,
 	if (this->fmt_removing[direction])
 		info = NULL;
 
+	spa_log_debug(this->log, "%p: %d.%d info", this, direction, port);
+
 	if (direction == SPA_DIRECTION_OUTPUT)
 		spa_node_emit_port_info(&this->hooks, direction, port, info);
 }
 
-static struct spa_node_events fmt_output_events = {
+static const struct spa_node_events fmt_output_events = {
 	SPA_VERSION_NODE_EVENTS,
 	.port_info = fmt_output_port_info,
 	.result = on_node_result,
@@ -649,13 +657,13 @@ static void on_channelmix_info(void *data, const struct spa_node_info *info)
 	emit_node_info(this, false);
 }
 
-static struct spa_node_events channelmix_events = {
+static const struct spa_node_events channelmix_events = {
 	SPA_VERSION_NODE_EVENTS,
 	.info = on_channelmix_info,
 	.result = on_node_result,
 };
 
-static struct spa_node_events resample_events = {
+static const struct spa_node_events resample_events = {
 	SPA_VERSION_NODE_EVENTS,
 	.result = on_node_result,
 };
@@ -681,11 +689,13 @@ static int reconfigure_mode(struct impl *this, enum spa_param_port_config_mode m
 	case SPA_PARAM_PORT_CONFIG_MODE_dsp:
 		new = direction == SPA_DIRECTION_INPUT ?  this->merger : this->splitter;
 		break;
+	case SPA_PARAM_PORT_CONFIG_MODE_none:
+		new = NULL;
+		break;
 	default:
 		return -EIO;
 	}
 
-	this->mode[direction] = mode;
 	clean_convert(this);
 
 	this->fmt[direction] = new;
@@ -694,7 +704,7 @@ static int reconfigure_mode(struct impl *this, enum spa_param_port_config_mode m
 	do_signal = this->fmt[direction] != old ||
 		mode == SPA_PARAM_PORT_CONFIG_MODE_dsp;
 
-	if (do_signal) {
+	if (do_signal && old != NULL) {
 		/* change, remove old ports. We trigger a new port_info event
 		 * on the old node with info set to NULL to mark delete */
 		if (this->have_fmt_listener[direction]) {
@@ -713,23 +723,31 @@ static int reconfigure_mode(struct impl *this, enum spa_param_port_config_mode m
 		}
 	}
 
-	if (info) {
+	this->mode[direction] = mode;
+
+	if (new != NULL) {
 		struct spa_pod_builder b = { 0 };
 		uint8_t buffer[1024];
-		struct spa_pod *param;
-
-		spa_log_debug(this->log, NAME " %p: port config %d", this, info->info.raw.channels);
+		struct spa_pod *param = NULL;
 
 		spa_pod_builder_init(&b, buffer, sizeof(buffer));
 
-		param = spa_format_audio_raw_build(&b, SPA_PARAM_Format, &info->info.raw);
-		param = spa_pod_builder_add_object(&b,
-			SPA_TYPE_OBJECT_ParamPortConfig, SPA_PARAM_PortConfig,
-			SPA_PARAM_PORT_CONFIG_direction,	SPA_POD_Id(direction),
-			SPA_PARAM_PORT_CONFIG_mode,		SPA_POD_Id(SPA_PARAM_PORT_CONFIG_MODE_dsp),
-			SPA_PARAM_PORT_CONFIG_monitor,		SPA_POD_Bool(monitor),
-			SPA_PARAM_PORT_CONFIG_format,		SPA_POD_Pod(param));
-		res = spa_node_set_param(this->fmt[direction], SPA_PARAM_PortConfig, 0, param);
+		if (info) {
+			spa_log_debug(this->log, NAME " %p: port config %d", this, info->info.raw.channels);
+			param = spa_format_audio_raw_build(&b, SPA_PARAM_Format, &info->info.raw);
+		}
+		if (mode == SPA_PARAM_PORT_CONFIG_MODE_dsp) {
+			param = spa_pod_builder_add_object(&b,
+				SPA_TYPE_OBJECT_ParamPortConfig, SPA_PARAM_PortConfig,
+				SPA_PARAM_PORT_CONFIG_direction,	SPA_POD_Id(direction),
+				SPA_PARAM_PORT_CONFIG_mode,		SPA_POD_Id(SPA_PARAM_PORT_CONFIG_MODE_dsp),
+				SPA_PARAM_PORT_CONFIG_monitor,		SPA_POD_Bool(monitor),
+				SPA_PARAM_PORT_CONFIG_format,		SPA_POD_Pod(param));
+			res = spa_node_set_param(this->fmt[direction], SPA_PARAM_PortConfig, 0, param);
+		} else {
+			res = spa_node_port_set_param(this->fmt[direction], direction, 0,
+				SPA_PARAM_Format, 0, param);
+		}
 		if (res < 0)
 			return res;
 
@@ -739,7 +757,7 @@ static int reconfigure_mode(struct impl *this, enum spa_param_port_config_mode m
 	}
 
 	/* notify ports of new node */
-	if (do_signal) {
+	if (do_signal && new != NULL) {
 		if (this->have_fmt_listener[direction])
 			spa_hook_remove(&this->fmt_listener[direction]);
 
@@ -803,10 +821,10 @@ static int impl_node_set_param(void *object, uint32_t id, uint32_t flags,
 		spa_log_debug(this->log, "mode:%d direction:%d %d", mode, dir, monitor);
 
 		switch (mode) {
-		case SPA_PARAM_PORT_CONFIG_MODE_none:
 		case SPA_PARAM_PORT_CONFIG_MODE_passthrough:
 			return -ENOTSUP;
 
+		case SPA_PARAM_PORT_CONFIG_MODE_none:
 		case SPA_PARAM_PORT_CONFIG_MODE_convert:
 			break;
 
@@ -899,19 +917,23 @@ impl_node_add_listener(void *object,
 	this->add_listener = true;
 
 	spa_zero(l);
-	spa_node_add_listener(this->fmt[SPA_DIRECTION_INPUT],
-			&l[0], &fmt_input_events, this);
+	if (this->fmt[SPA_DIRECTION_INPUT])
+		spa_node_add_listener(this->fmt[SPA_DIRECTION_INPUT],
+				&l[0], &fmt_input_events, this);
 	spa_node_add_listener(this->channelmix,
 			&l[1], &channelmix_events, this);
 	spa_node_add_listener(this->resample,
 			&l[2], &resample_events, this);
-	spa_node_add_listener(this->fmt[SPA_DIRECTION_OUTPUT],
-			&l[3], &fmt_output_events, this);
+	if (this->fmt[SPA_DIRECTION_OUTPUT])
+		spa_node_add_listener(this->fmt[SPA_DIRECTION_OUTPUT],
+				&l[3], &fmt_output_events, this);
 
-	spa_hook_remove(&l[0]);
+	if (this->fmt[SPA_DIRECTION_INPUT])
+		spa_hook_remove(&l[0]);
 	spa_hook_remove(&l[1]);
 	spa_hook_remove(&l[2]);
-	spa_hook_remove(&l[3]);
+	if (this->fmt[SPA_DIRECTION_OUTPUT])
+		spa_hook_remove(&l[3]);
 
 	this->add_listener = false;
 
@@ -1040,15 +1062,29 @@ impl_node_port_set_param(void *object,
 	spa_log_debug(this->log, NAME " %p: set param %u on port %d:%d %p",
 				this, id, direction, port_id, param);
 
-	is_monitor = IS_MONITOR_PORT(this, direction, port_id);
-	if (is_monitor)
-		target = this->fmt[SPA_DIRECTION_INPUT];
-	else
-		target = this->fmt[direction];
+	switch (id) {
+	default:
+		is_monitor = IS_MONITOR_PORT(this, direction, port_id);
+		if (is_monitor)
+			target = this->fmt[SPA_DIRECTION_INPUT];
+		else
+			target = this->fmt[direction];
+		break;
+	}
 
 	if ((res = spa_node_port_set_param(target,
 					direction, port_id, id, flags, param)) < 0)
 		return res;
+
+	switch (id) {
+	case SPA_PARAM_Latency:
+		target = this->fmt[SPA_DIRECTION_REVERSE(direction)];
+		port_id = 0;
+		if ((res = spa_node_port_set_param(target,
+					direction, port_id, id, flags, param)) < 0)
+			return res;
+		break;
+	}
 
 	return res;
 }

@@ -1,6 +1,7 @@
 pipewire_jack_sources = [
   'export.c',
   'pipewire-jack.c',
+  'match-rules.c',
   'ringbuffer.c',
   'uuid.c',
 ]
@@ -15,8 +16,6 @@ pipewire_dummy_sources = [
 ]
 
 pipewire_jack_c_args = [
-  '-DHAVE_CONFIG_H',
-  '-D_GNU_SOURCE',
   '-DPIC',
 ]
 
@@ -42,7 +41,7 @@ pipewire_jack = shared_library('jack',
     version : libversion,
     c_args : pipewire_jack_c_args,
     include_directories : [configinc, jack_inc],
-    dependencies : [pipewire_dep, atomic_dep, mathlib],
+    dependencies : [pipewire_dep, mathlib],
     install : true,
     install_dir : libjack_path,
 )
@@ -53,7 +52,7 @@ pipewire_jackserver = shared_library('jackserver',
     version : libversion,
     c_args : pipewire_jack_c_args,
     include_directories : [configinc, jack_inc],
-    dependencies : [pipewire_dep, atomic_dep, mathlib],
+    dependencies : [pipewire_dep, mathlib],
     install : true,
     install_dir : libjack_path,
 )
@@ -69,20 +68,29 @@ pipewire_jackserver = shared_library('jacknet',
     install_dir : libjack_path,
 )
 
-if get_option('jack-devel').enabled()
+
+if get_option('jack-devel') == true
+  if meson.version().version_compare('<0.59.0')
+    error(
+          '''
+          Before version 0.59.0 Meson creates a wrong jack pkg-config file.
+          For that reason this is now an error. Please update Meson,
+          if you want to have JACK development files.
+          ''')
+  endif
+
   pkgconfig.generate(filebase : 'jack',
   libraries : [pipewire_jack, pipewire_jackserver],
   name : 'jack',
   description : 'PipeWire JACK API',
   version : '1.9.17',
   extra_cflags : '-D_REENTRANT',
-  variables: ['server_libs=-L${libdir} -ljackserver'])
+  unescaped_variables: ['server_libs=-L${libdir} -ljackserver'])
 endif
 
 if sdl_dep.found()
   executable('video-dsp-play',
     '../examples/video-dsp-play.c',
-    c_args : [ '-D_GNU_SOURCE' ],
     include_directories : [jack_inc],
     install : installed_tests_enabled,
     install_dir : installed_tests_execdir / 'examples' / 'jack',

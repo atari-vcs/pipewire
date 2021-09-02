@@ -46,6 +46,9 @@
 
 #include "module-zeroconf-discover/avahi-poll.h"
 
+/** \page page_module_zeroconf_discover PipeWire Module: Zeroconf Discover
+ */
+
 #define NAME "zeroconf-discover"
 
 #define MODULE_USAGE	" "
@@ -171,9 +174,9 @@ static void impl_free(struct impl *impl)
 		avahi_client_free(impl->client);
 	if (impl->avahi_poll)
 		pw_avahi_poll_free(impl->avahi_poll);
-	if (impl->properties)
-		pw_properties_free(impl->properties);
-	pw_work_queue_cancel(impl->work, impl, SPA_ID_INVALID);
+	pw_properties_free(impl->properties);
+	if (impl->work)
+		pw_work_queue_cancel(impl->work, impl, SPA_ID_INVALID);
 	free(impl);
 }
 
@@ -188,6 +191,36 @@ static const struct pw_impl_module_events module_events = {
 	PW_VERSION_IMPL_MODULE_EVENTS,
 	.destroy = module_destroy,
 };
+
+static void pw_properties_from_avahi_string(const char *key, const char *value, struct pw_properties *props) {
+	if (spa_streq(key, "device")) {
+		pw_properties_set(props, PW_KEY_NODE_TARGET, value);
+	}
+	else if (spa_streq(key, "rate")) {
+		pw_properties_setf(props, PW_KEY_AUDIO_RATE, "%u", atoi(value));
+	}
+	else if (spa_streq(key, "channels")) {
+		pw_properties_setf(props, PW_KEY_AUDIO_CHANNELS, "%u", atoi(value));
+	}
+	else if (spa_streq(key, "format")) {
+		pw_properties_set(props, PW_KEY_AUDIO_FORMAT, value);
+	}
+	else if (spa_streq(key, "icon-name")) {
+		pw_properties_set(props, PW_KEY_DEVICE_ICON_NAME, value);
+	}
+	else if (spa_streq(key, "product-name")) {
+		pw_properties_set(props, PW_KEY_DEVICE_PRODUCT_NAME, value);
+	}
+	else if (spa_streq(key, "description")) {
+		pw_properties_set(props, "tunnel.remote.description", value);
+	}
+	else if (spa_streq(key, "fqdn")) {
+		pw_properties_set(props, "tunnel.remote.fqdn", value);
+	}
+	else if (spa_streq(key, "user-name")) {
+		pw_properties_set(props, "tunnel.remote.user", value);
+	}
+}
 
 static void resolver_cb(AvahiServiceResolver *r, AvahiIfIndex interface, AvahiProtocol protocol,
 	AvahiResolverEvent event, const char *name, const char *type, const char *domain,
@@ -230,35 +263,7 @@ static void resolver_cb(AvahiServiceResolver *r, AvahiIfIndex interface, AvahiPr
 		if (avahi_string_list_get_pair(l, &key, &value, NULL) != 0)
 			break;
 
-		if (spa_streq(key, "device")) {
-			pw_properties_set(props, PW_KEY_NODE_TARGET, value);
-		}
-		else if (spa_streq(key, "rate")) {
-			pw_properties_setf(props, PW_KEY_AUDIO_RATE, "%u", atoi(value));
-		}
-		else if (spa_streq(key, "channels")) {
-			pw_properties_setf(props, PW_KEY_AUDIO_CHANNELS, "%u", atoi(value));
-		}
-		else if (spa_streq(key, "format")) {
-			pw_properties_set(props, PW_KEY_AUDIO_FORMAT, value);
-		}
-		else if (spa_streq(key, "icon-name")) {
-			pw_properties_set(props, PW_KEY_DEVICE_ICON_NAME, value);
-		}
-		else if (spa_streq(key, "channel_map")) {
-		}
-		else if (spa_streq(key, "product-name")) {
-			pw_properties_set(props, PW_KEY_DEVICE_PRODUCT_NAME, value);
-		}
-		else if (spa_streq(key, "description")) {
-			pw_properties_set(props, "tunnel.remote.description", value);
-		}
-		else if (spa_streq(key, "fqdn")) {
-			pw_properties_set(props, "tunnel.remote.fqdn", value);
-		}
-		else if (spa_streq(key, "user-name")) {
-			pw_properties_set(props, "tunnel.remote.user", value);
-		}
+		pw_properties_from_avahi_string(key, value, props);
 		avahi_free(key);
 		avahi_free(value);
 	}
@@ -463,7 +468,7 @@ static int start_avahi(struct impl *impl)
 	loop = pw_context_get_main_loop(impl->context);
 	impl->avahi_poll = pw_avahi_poll_new(loop);
 
-	return start_client(impl);;
+	return start_client(impl);
 }
 
 SPA_EXPORT
@@ -491,8 +496,11 @@ int pipewire__module_init(struct pw_impl_module *module, const char *args)
 
 	impl->module = module;
 	impl->context = context;
-	impl->work = pw_context_get_work_queue(context);
 	impl->properties = props;
+
+	impl->work = pw_context_get_work_queue(context);
+	if (impl->work == NULL)
+		goto error_errno;
 
 	pw_impl_module_add_listener(module, &impl->module_listener, &module_events, impl);
 
@@ -504,6 +512,7 @@ int pipewire__module_init(struct pw_impl_module *module, const char *args)
 
 error_errno:
 	res = -errno;
-	free(impl);
+	if (impl)
+		impl_free(impl);
 	return res;
 }

@@ -54,38 +54,38 @@ static const uint32_t channel_table[PA_CHANNEL_POSITION_MAX] = {
 	[PA_CHANNEL_POSITION_SIDE_LEFT] = ACP_CHANNEL_SL,
 	[PA_CHANNEL_POSITION_SIDE_RIGHT] = ACP_CHANNEL_SR,
 
-	[PA_CHANNEL_POSITION_AUX0] = ACP_CHANNEL_CUSTOM_START + 1,
-	[PA_CHANNEL_POSITION_AUX1] = ACP_CHANNEL_CUSTOM_START + 2,
-	[PA_CHANNEL_POSITION_AUX2] = ACP_CHANNEL_CUSTOM_START + 3,
-	[PA_CHANNEL_POSITION_AUX3] = ACP_CHANNEL_CUSTOM_START + 4,
-	[PA_CHANNEL_POSITION_AUX4] = ACP_CHANNEL_CUSTOM_START + 5,
-	[PA_CHANNEL_POSITION_AUX5] = ACP_CHANNEL_CUSTOM_START + 6,
-	[PA_CHANNEL_POSITION_AUX6] = ACP_CHANNEL_CUSTOM_START + 7,
-	[PA_CHANNEL_POSITION_AUX7] = ACP_CHANNEL_CUSTOM_START + 8,
-	[PA_CHANNEL_POSITION_AUX8] = ACP_CHANNEL_CUSTOM_START + 9,
-	[PA_CHANNEL_POSITION_AUX9] = ACP_CHANNEL_CUSTOM_START + 10,
-	[PA_CHANNEL_POSITION_AUX10] = ACP_CHANNEL_CUSTOM_START + 11,
-	[PA_CHANNEL_POSITION_AUX11] = ACP_CHANNEL_CUSTOM_START + 12,
-	[PA_CHANNEL_POSITION_AUX12] = ACP_CHANNEL_CUSTOM_START + 13,
-	[PA_CHANNEL_POSITION_AUX13] = ACP_CHANNEL_CUSTOM_START + 14,
-	[PA_CHANNEL_POSITION_AUX14] = ACP_CHANNEL_CUSTOM_START + 15,
-	[PA_CHANNEL_POSITION_AUX15] = ACP_CHANNEL_CUSTOM_START + 16,
-	[PA_CHANNEL_POSITION_AUX16] = ACP_CHANNEL_CUSTOM_START + 17,
-	[PA_CHANNEL_POSITION_AUX17] = ACP_CHANNEL_CUSTOM_START + 18,
-	[PA_CHANNEL_POSITION_AUX18] = ACP_CHANNEL_CUSTOM_START + 19,
-	[PA_CHANNEL_POSITION_AUX19] = ACP_CHANNEL_CUSTOM_START + 20,
-	[PA_CHANNEL_POSITION_AUX20] = ACP_CHANNEL_CUSTOM_START + 21,
-	[PA_CHANNEL_POSITION_AUX21] = ACP_CHANNEL_CUSTOM_START + 22,
-	[PA_CHANNEL_POSITION_AUX22] = ACP_CHANNEL_CUSTOM_START + 23,
-	[PA_CHANNEL_POSITION_AUX23] = ACP_CHANNEL_CUSTOM_START + 24,
-	[PA_CHANNEL_POSITION_AUX24] = ACP_CHANNEL_CUSTOM_START + 25,
-	[PA_CHANNEL_POSITION_AUX25] = ACP_CHANNEL_CUSTOM_START + 26,
-	[PA_CHANNEL_POSITION_AUX26] = ACP_CHANNEL_CUSTOM_START + 27,
-	[PA_CHANNEL_POSITION_AUX27] = ACP_CHANNEL_CUSTOM_START + 28,
-	[PA_CHANNEL_POSITION_AUX28] = ACP_CHANNEL_CUSTOM_START + 29,
-	[PA_CHANNEL_POSITION_AUX29] = ACP_CHANNEL_CUSTOM_START + 30,
-	[PA_CHANNEL_POSITION_AUX30] = ACP_CHANNEL_CUSTOM_START + 31,
-	[PA_CHANNEL_POSITION_AUX31] = ACP_CHANNEL_CUSTOM_START + 32,
+	[PA_CHANNEL_POSITION_AUX0] = ACP_CHANNEL_START_Aux + 0,
+	[PA_CHANNEL_POSITION_AUX1] = ACP_CHANNEL_START_Aux + 1,
+	[PA_CHANNEL_POSITION_AUX2] = ACP_CHANNEL_START_Aux + 2,
+	[PA_CHANNEL_POSITION_AUX3] = ACP_CHANNEL_START_Aux + 3,
+	[PA_CHANNEL_POSITION_AUX4] = ACP_CHANNEL_START_Aux + 4,
+	[PA_CHANNEL_POSITION_AUX5] = ACP_CHANNEL_START_Aux + 5,
+	[PA_CHANNEL_POSITION_AUX6] = ACP_CHANNEL_START_Aux + 6,
+	[PA_CHANNEL_POSITION_AUX7] = ACP_CHANNEL_START_Aux + 7,
+	[PA_CHANNEL_POSITION_AUX8] = ACP_CHANNEL_START_Aux + 8,
+	[PA_CHANNEL_POSITION_AUX9] = ACP_CHANNEL_START_Aux + 9,
+	[PA_CHANNEL_POSITION_AUX10] = ACP_CHANNEL_START_Aux + 10,
+	[PA_CHANNEL_POSITION_AUX11] = ACP_CHANNEL_START_Aux + 11,
+	[PA_CHANNEL_POSITION_AUX12] = ACP_CHANNEL_START_Aux + 12,
+	[PA_CHANNEL_POSITION_AUX13] = ACP_CHANNEL_START_Aux + 12,
+	[PA_CHANNEL_POSITION_AUX14] = ACP_CHANNEL_START_Aux + 14,
+	[PA_CHANNEL_POSITION_AUX15] = ACP_CHANNEL_START_Aux + 15,
+	[PA_CHANNEL_POSITION_AUX16] = ACP_CHANNEL_START_Aux + 16,
+	[PA_CHANNEL_POSITION_AUX17] = ACP_CHANNEL_START_Aux + 17,
+	[PA_CHANNEL_POSITION_AUX18] = ACP_CHANNEL_START_Aux + 18,
+	[PA_CHANNEL_POSITION_AUX19] = ACP_CHANNEL_START_Aux + 19,
+	[PA_CHANNEL_POSITION_AUX20] = ACP_CHANNEL_START_Aux + 20,
+	[PA_CHANNEL_POSITION_AUX21] = ACP_CHANNEL_START_Aux + 21,
+	[PA_CHANNEL_POSITION_AUX22] = ACP_CHANNEL_START_Aux + 22,
+	[PA_CHANNEL_POSITION_AUX23] = ACP_CHANNEL_START_Aux + 23,
+	[PA_CHANNEL_POSITION_AUX24] = ACP_CHANNEL_START_Aux + 24,
+	[PA_CHANNEL_POSITION_AUX25] = ACP_CHANNEL_START_Aux + 25,
+	[PA_CHANNEL_POSITION_AUX26] = ACP_CHANNEL_START_Aux + 26,
+	[PA_CHANNEL_POSITION_AUX27] = ACP_CHANNEL_START_Aux + 27,
+	[PA_CHANNEL_POSITION_AUX28] = ACP_CHANNEL_START_Aux + 28,
+	[PA_CHANNEL_POSITION_AUX29] = ACP_CHANNEL_START_Aux + 29,
+	[PA_CHANNEL_POSITION_AUX30] = ACP_CHANNEL_START_Aux + 30,
+	[PA_CHANNEL_POSITION_AUX31] = ACP_CHANNEL_START_Aux + 31,
 
 	[PA_CHANNEL_POSITION_TOP_CENTER] = ACP_CHANNEL_TC,
 
@@ -150,8 +150,8 @@ static inline uint32_t channel_pa2acp(pa_channel_position_t channel)
 
 char *acp_channel_str(char *buf, size_t len, enum acp_channel ch)
 {
-	if (ch >= ACP_CHANNEL_CUSTOM_START) {
-		snprintf(buf, len, "AUX%d", ch - ACP_CHANNEL_CUSTOM_START);
+	if (ch >= ACP_CHANNEL_START_Aux && ch <= ACP_CHANNEL_LAST_Aux) {
+		snprintf(buf, len, "AUX%d", ch - ACP_CHANNEL_START_Aux);
 	} else if (ch >= ACP_CHANNEL_UNKNOWN && ch <= ACP_CHANNEL_BRC) {
 		snprintf(buf, len, "%s", channel_names[ch]);
 	} else {
@@ -216,8 +216,8 @@ static void init_device(pa_card *impl, pa_alsa_device *dev, pa_alsa_direction_t 
 	dev->device.format.format_mask = m->sample_spec.format;
 	dev->device.format.rate_mask = m->sample_spec.rate;
 	dev->device.format.channels = m->channel_map.channels;
-	pa_cvolume_reset(&dev->real_volume, m->channel_map.channels);
-	pa_cvolume_reset(&dev->soft_volume, m->channel_map.channels);
+	pa_cvolume_reset(&dev->real_volume, dev->device.format.channels);
+	pa_cvolume_reset(&dev->soft_volume, dev->device.format.channels);
 	for (i = 0; i < m->channel_map.channels; i++)
 		dev->device.format.map[i]= channel_pa2acp(m->channel_map.map[i]);
 	dev->direction = direction;
@@ -241,8 +241,21 @@ static void init_device(pa_card *impl, pa_alsa_device *dev, pa_alsa_direction_t 
 
 	dev->ports = pa_hashmap_new(pa_idxset_string_hash_func,
 			pa_idxset_string_compare_func);
-	if (m->ucm_context.ucm)
+	if (m->ucm_context.ucm) {
 		dev->ucm_context = &m->ucm_context;
+		if (impl->ucm.alibpref != NULL) {
+			char **d;
+			for (d = m->device_strings; *d; d++) {
+				if (pa_startswith(*d, impl->ucm.alibpref)) {
+					size_t plen = strlen(impl->ucm.alibpref);
+					size_t len = strlen(*d);
+					memmove(*d, (*d) + plen, len - plen + 1);
+					dev->device.flags |= ACP_DEVICE_UCM_DEVICE;
+					break;
+				}
+			}
+		}
+	}
 	pa_dynarray_init(&dev->port_array, NULL);
 }
 
@@ -305,8 +318,10 @@ static int add_pro_profile(pa_card *impl, uint32_t index)
 	if ((err = snd_ctl_open(&ctl_hndl, device, 0)) < 0) {
 		pa_log_error("can't open control for card %s: %s",
 				device, snd_strerror(err));
+	        free(device);
 		return err;
 	}
+	free(device);
 
 	snd_pcm_info_alloca(&pcminfo);
 
@@ -1032,10 +1047,10 @@ static int read_volume(pa_alsa_device *dev)
 	/* Shift down by the base volume, so that 0dB becomes maximum volume */
 	pa_sw_cvolume_multiply_scalar(&r, &r, dev->base_volume);
 
-	if (pa_cvolume_equal(&dev->real_volume, &r))
+	if (pa_cvolume_equal(&dev->hardware_volume, &r))
 		return 0;
 
-	dev->real_volume = r;
+	dev->real_volume = dev->hardware_volume = r;
 
 	pa_log_info("New hardware volume: min:%d max:%d",
 			pa_cvolume_min(&r), pa_cvolume_max(&r));
@@ -1172,7 +1187,7 @@ static void mixer_volume_init(pa_card *impl, pa_alsa_device *dev)
 		pa_log_info("Using hardware volume control. Hardware dB scale %s.",
 				dev->mixer_path->has_dB ? "supported" : "not supported");
 	}
-	dev->device.base_volume = pa_sw_volume_to_linear(dev->base_volume);;
+	dev->device.base_volume = pa_sw_volume_to_linear(dev->base_volume);
 	dev->device.volume_step = 1.0f / dev->n_volume_steps;
 
 	if (impl->soft_mixer || !dev->mixer_path || !dev->mixer_path->has_mute) {
@@ -1321,8 +1336,15 @@ static int device_enable(pa_card *impl, pa_alsa_mapping *mapping, pa_alsa_device
 
 	if (dev->read_volume)
 		dev->read_volume(dev);
+	else {
+		pa_cvolume_reset(&dev->real_volume, dev->device.format.channels);
+		pa_cvolume_reset(&dev->soft_volume, dev->device.format.channels);
+	}
 	if (dev->read_mute)
 		dev->read_mute(dev);
+	else
+		dev->muted = false;
+
 	return 0;
 }
 
@@ -1809,7 +1831,7 @@ int acp_device_set_volume(struct acp_device *dev, const float *volume, uint32_t 
 
 	v.channels = d->mapping->channel_map.channels;
 	for (i = 0; i < v.channels; i++)
-		v.values[i] = pa_sw_volume_from_linear(volume[i % n_volume]);;
+		v.values[i] = pa_sw_volume_from_linear(volume[i % n_volume]);
 
 	pa_log_info("Set %s volume: min:%d max:%d",
 			d->set_volume ? "hardware" : "software",

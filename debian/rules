@@ -24,19 +24,20 @@ override_dh_auto_configure:
 		-Dauto_features=enabled \
 		-Davahi=disabled \
 		-Dbluez5-codec-aac=disabled \
+		-Dbluez5-codec-aptx=disabled \
 		-Dbluez5-codec-ldac=$(BLUEZ5_CODEC_LDAC) \
 		-Dlibcamera=disabled \
 		-Ddocs=$(DOCS) \
 		-Dffmpeg=disabled \
 		-Dinstalled_tests=enabled \
 		-Dman=enabled \
+		-Droc=disabled \
 		-Dtest=enabled \
 		-Dvideotestsrc=enabled \
 		-Dvolume=enabled \
 		-Dvulkan=disabled \
 		-Dsdl2=disabled \
 		-Dpipewire-jack=disabled \
-		-Dbluez5-codec-aptx=disabled \
 		-Djack=disabled \
 		$(NULL)
 	install -d debian/ld.so.conf.d

@@ -67,7 +67,7 @@ ssize_t getrandom(void *buf, size_t buflen, unsigned int flags) {
 #include "pipewire/impl.h"
 #include "pipewire/private.h"
 
-#include "extensions/protocol-native.h"
+#include "pipewire/extensions/protocol-native.h"
 
 #define NAME "impl-core"
 
@@ -463,8 +463,7 @@ struct pw_impl_core *pw_context_create_core(struct pw_context *context,
 	return this;
 
 error_exit:
-	if (properties)
-		pw_properties_free(properties);
+	pw_properties_free(properties);
 	free(this);
 	errno = -res;
 	return NULL;
@@ -610,15 +609,16 @@ SPA_EXPORT
 int pw_impl_core_register(struct pw_impl_core *core,
 			 struct pw_properties *properties)
 {
-	struct pw_context *context = core->context;
-	int res;
-	const char *keys[] = {
+	static const char * const keys[] = {
 		PW_KEY_USER_NAME,
 		PW_KEY_HOST_NAME,
 		PW_KEY_CORE_NAME,
 		PW_KEY_CORE_VERSION,
 		NULL
 	};
+
+	struct pw_context *context = core->context;
+	int res;
 
 	if (core->registered)
 		goto error_existed;
@@ -652,8 +652,7 @@ error_existed:
 	res = -EEXIST;
 	goto error_exit;
 error_exit:
-	if (properties)
-		pw_properties_free(properties);
+	pw_properties_free(properties);
 	return res;
 }
 
