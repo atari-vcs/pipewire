@@ -40,7 +40,10 @@
 
 #include <pipewire/private.h>
 #include <pipewire/impl.h>
-#include <extensions/profiler.h>
+#include <pipewire/extensions/profiler.h>
+
+/** \page page_module_loopback PipeWire Module: Loopback
+ */
 
 #define NAME "loopback"
 
@@ -124,10 +127,10 @@ static void capture_process(void *d)
 	uint32_t i;
 
 	if ((in = pw_stream_dequeue_buffer(impl->capture)) == NULL)
-		pw_log_warn("out of capture buffers: %m");
+		pw_log_debug("out of capture buffers: %m");
 
 	if ((out = pw_stream_dequeue_buffer(impl->playback)) == NULL)
-		pw_log_warn("out of playback buffers: %m");
+		pw_log_debug("out of playback buffers: %m");
 
 	if (in != NULL && out != NULL) {
 		uint32_t size = 0;
@@ -162,10 +165,38 @@ static void capture_process(void *d)
 		pw_stream_queue_buffer(impl->playback, out);
 }
 
+static void param_latency_changed(struct impl *impl, const struct spa_pod *param,
+		struct pw_stream *other)
+{
+	struct spa_latency_info latency;
+	uint8_t buffer[1024];
+	struct spa_pod_builder b;
+	const struct spa_pod *params[1];
+
+	if (spa_latency_parse(param, &latency) < 0)
+		return;
+
+	spa_pod_builder_init(&b, buffer, sizeof(buffer));
+	params[0] = spa_latency_build(&b, SPA_PARAM_Latency, &latency);
+	pw_stream_update_params(other, params, 1);
+}
+
+static void capture_param_changed(void *data, uint32_t id, const struct spa_pod *param)
+{
+	struct impl *impl = data;
+
+	switch (id) {
+	case SPA_PARAM_Latency:
+		param_latency_changed(impl, param, impl->playback);
+		break;
+	}
+}
+
 static const struct pw_stream_events in_stream_events = {
 	PW_VERSION_STREAM_EVENTS,
 	.destroy = capture_destroy,
-	.process = capture_process
+	.process = capture_process,
+	.param_changed = capture_param_changed,
 };
 
 static void playback_destroy(void *d)
@@ -175,9 +206,20 @@ static void playback_destroy(void *d)
 	impl->playback = NULL;
 }
 
+static void playback_param_changed(void *data, uint32_t id, const struct spa_pod *param)
+{
+	struct impl *impl = data;
+
+	switch (id) {
+	case SPA_PARAM_Latency:
+		param_latency_changed(impl, param, impl->capture);
+		break;
+	}
+}
 static const struct pw_stream_events out_stream_events = {
 	PW_VERSION_STREAM_EVENTS,
-	.destroy = playback_destroy
+	.destroy = playback_destroy,
+	.param_changed = playback_param_changed,
 };
 
 static int setup_streams(struct impl *impl)
@@ -275,11 +317,10 @@ static void impl_destroy(struct impl *impl)
 		pw_stream_destroy(impl->playback);
 	if (impl->core && impl->do_disconnect)
 		pw_core_disconnect(impl->core);
-	if (impl->capture_props)
-		pw_properties_free(impl->capture_props);
-	if (impl->playback_props)
-		pw_properties_free(impl->playback_props);
-	pw_work_queue_cancel(impl->work, impl, SPA_ID_INVALID);
+	pw_properties_free(impl->capture_props);
+	pw_properties_free(impl->playback_props);
+	if (impl->work)
+		pw_work_queue_cancel(impl->work, impl, SPA_ID_INVALID);
 	free(impl);
 }
 
@@ -384,11 +425,24 @@ int pipewire__module_init(struct pw_impl_module *module, const char *args)
 	impl->module = module;
 	impl->context = context;
 	impl->work = pw_context_get_work_queue(context);
+	if (impl->work == NULL) {
+		res = -errno;
+		pw_log_error( "can't get work queue: %m");
+		goto error;
+	}
 
 	if (pw_properties_get(props, PW_KEY_NODE_GROUP) == NULL)
 		pw_properties_setf(props, PW_KEY_NODE_GROUP, "loopback-%u", id);
+	if (pw_properties_get(props, PW_KEY_NODE_LINK_GROUP) == NULL)
+		pw_properties_setf(props, PW_KEY_NODE_LINK_GROUP, "loopback-%u", id);
 	if (pw_properties_get(props, PW_KEY_NODE_VIRTUAL) == NULL)
 		pw_properties_set(props, PW_KEY_NODE_VIRTUAL, "true");
+
+	if (pw_properties_get(props, PW_KEY_NODE_NAME) == NULL)
+		pw_properties_setf(props, PW_KEY_NODE_NAME, "loopback-%u", id);
+	if (pw_properties_get(props, PW_KEY_NODE_DESCRIPTION) == NULL)
+		pw_properties_set(props, PW_KEY_NODE_DESCRIPTION,
+				pw_properties_get(props, PW_KEY_NODE_NAME));
 
 	if ((str = pw_properties_get(props, "capture.props")) != NULL)
 		pw_properties_update_string(impl->capture_props, str, strlen(str));
@@ -401,6 +455,7 @@ int pipewire__module_init(struct pw_impl_module *module, const char *args)
 	copy_props(impl, props, PW_KEY_NODE_NAME);
 	copy_props(impl, props, PW_KEY_NODE_DESCRIPTION);
 	copy_props(impl, props, PW_KEY_NODE_GROUP);
+	copy_props(impl, props, PW_KEY_NODE_LINK_GROUP);
 	copy_props(impl, props, PW_KEY_NODE_LATENCY);
 	copy_props(impl, props, PW_KEY_NODE_VIRTUAL);
 
@@ -441,8 +496,7 @@ int pipewire__module_init(struct pw_impl_module *module, const char *args)
 	return 0;
 
 error:
-	if (props)
-		pw_properties_free(props);
+	pw_properties_free(props);
 	impl_destroy(impl);
 	return res;
 }

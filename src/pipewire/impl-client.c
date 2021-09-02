@@ -135,7 +135,7 @@ static int client_error(void *object, uint32_t id, int res, const char *error)
 	return 0;
 }
 
-static bool has_key(const char *keys[], const char *key)
+static bool has_key(const char * const keys[], const char *key)
 {
 	int i;
 	for (i = 0; keys[i]; i++) {
@@ -147,17 +147,19 @@ static bool has_key(const char *keys[], const char *key)
 
 static int update_properties(struct pw_impl_client *client, const struct spa_dict *dict, bool filter)
 {
-	struct pw_resource *resource;
-	int changed = 0;
-	uint32_t i;
-	const char *old, *ignored[] = {
+	static const char * const ignored[] = {
 		PW_KEY_OBJECT_ID,
 		NULL
 	};
 
+	struct pw_resource *resource;
+	int changed = 0;
+	uint32_t i;
+	const char *old;
+
         for (i = 0; i < dict->n_items; i++) {
 		if (filter) {
-			if (strstr(dict->items[i].key, "pipewire.") == dict->items[i].key &&
+			if (spa_strstartswith(dict->items[i].key, "pipewire.") &&
 			    (old = pw_properties_get(client->properties, dict->items[i].key)) != NULL &&
 			    (dict->items[i].value == NULL || !spa_streq(old, dict->items[i].value))) {
 				pw_log_warn(NAME" %p: refuse property update '%s' from '%s' to '%s'",
@@ -200,14 +202,16 @@ static void update_busy(struct pw_impl_client *client)
 
 static int finish_register(struct pw_impl_client *client)
 {
-	struct impl *impl = SPA_CONTAINER_OF(client, struct impl, this);
-	struct pw_impl_client *current;
-	const char *keys[] = {
+	static const char * const keys[] = {
 		PW_KEY_ACCESS,
 		PW_KEY_CLIENT_ACCESS,
 		PW_KEY_APP_NAME,
 		NULL
 	};
+
+	struct impl *impl = SPA_CONTAINER_OF(client, struct impl, this);
+	struct pw_impl_client *current;
+
 	if (impl->registered)
 		return 0;
 
@@ -374,11 +378,9 @@ static const struct pw_context_events context_events = {
 /** Make a new client object
  *
  * \param core a \ref pw_context object to register the client with
- * \param ucred a ucred structure or NULL when unknown
  * \param properties optional client properties, ownership is taken
  * \return a newly allocated client object
  *
- * \memberof pw_impl_client
  */
 SPA_EXPORT
 struct pw_impl_client *pw_context_create_client(struct pw_impl_core *core,
@@ -449,8 +451,7 @@ error_clear_array:
 error_free:
 	free(impl);
 error_cleanup:
-	if (properties)
-		pw_properties_free(properties);
+	pw_properties_free(properties);
 	errno = -res;
 	return NULL;
 }
@@ -472,8 +473,7 @@ SPA_EXPORT
 int pw_impl_client_register(struct pw_impl_client *client,
 		       struct pw_properties *properties)
 {
-	struct pw_context *context = client->context;
-	const char *keys[] = {
+	static const char * const keys[] = {
 		PW_KEY_MODULE_ID,
 		PW_KEY_PROTOCOL,
 		PW_KEY_SEC_PID,
@@ -482,6 +482,8 @@ int pw_impl_client_register(struct pw_impl_client *client,
 		PW_KEY_SEC_LABEL,
 		NULL
 	};
+
+	struct pw_context *context = client->context;
 
 	if (client->registered)
 		goto error_existed;
@@ -512,8 +514,7 @@ int pw_impl_client_register(struct pw_impl_client *client,
 	return 0;
 
 error_existed:
-	if (properties)
-		pw_properties_free(properties);
+	pw_properties_free(properties);
 	return -EEXIST;
 }
 
@@ -571,7 +572,6 @@ static int destroy_resource(void *object, void *data)
  *
  * \param client the client to destroy
  *
- * \memberof pw_impl_client
  */
 SPA_EXPORT
 void pw_impl_client_destroy(struct pw_impl_client *client)
@@ -627,13 +627,12 @@ const struct pw_client_info *pw_impl_client_get_info(struct pw_impl_client *clie
 /** Update client properties
  *
  * \param client the client
- * \param dict a \struct spa_dict with properties
+ * \param dict a struct spa_dict with properties
  *
  * Add all properties in \a dict to the client properties. Existing
  * properties are overwritten. Items can be removed by setting the value
  * to NULL.
  *
- * \memberof pw_impl_client
  */
 SPA_EXPORT
 int pw_impl_client_update_properties(struct pw_impl_client *client, const struct spa_dict *dict)

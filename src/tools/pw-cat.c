@@ -45,10 +45,11 @@
 #include <spa/utils/string.h>
 #include <spa/utils/json.h>
 #include <spa/debug/types.h>
+#include <spa/debug/pod.h>
 
 #include <pipewire/pipewire.h>
 #include <pipewire/i18n.h>
-#include <extensions/metadata.h>
+#include <pipewire/extensions/metadata.h>
 
 #include "midifile.h"
 
@@ -152,6 +153,7 @@ struct data {
 	int sync;
 
 	struct spa_io_position *position;
+	struct spa_io_rate_match *rate_match;
 	bool drained;
 	uint64_t clock_time;
 
@@ -169,6 +171,8 @@ sf_str_to_fmt(const char *str)
 
 	if (spa_streq(str, "s8"))
 		return SF_FORMAT_PCM_S8;
+	if (spa_streq(str, "u8"))
+		return SF_FORMAT_PCM_U8;
 	if (spa_streq(str, "s16"))
 		return SF_FORMAT_PCM_16;
 	if (spa_streq(str, "s24"))
@@ -188,6 +192,8 @@ sf_fmt_to_str(int format)
 {
 	int sub_type = (format & SF_FORMAT_SUBMASK);
 
+	if (sub_type == SF_FORMAT_PCM_U8)
+		return "u8";
 	if (sub_type == SF_FORMAT_PCM_S8)
 		return "s8";
 	if (sub_type == SF_FORMAT_PCM_16)
@@ -203,7 +209,7 @@ sf_fmt_to_str(int format)
 	return "(invalid)";
 }
 
-#define STR_FMTS "(s8|s16|s32|f32|f64)"
+#define STR_FMTS "(u8|s8|s16|s32|f32|f64)"
 
 /* 0 = native, 1 = le, 2 = be */
 static inline int
@@ -222,8 +228,14 @@ sf_format_to_pw(int format)
 		return SPA_AUDIO_FORMAT_UNKNOWN;
 
 	switch (format & SF_FORMAT_SUBMASK) {
+	case SF_FORMAT_PCM_U8:
+		return SPA_AUDIO_FORMAT_U8;
 	case SF_FORMAT_PCM_S8:
 		return SPA_AUDIO_FORMAT_S8;
+	case SF_FORMAT_ULAW:
+		return SPA_AUDIO_FORMAT_ULAW;
+	case SF_FORMAT_ALAW:
+		return SPA_AUDIO_FORMAT_ALAW;
 	case SF_FORMAT_PCM_16:
 		return endianness == 1 ? SPA_AUDIO_FORMAT_S16_LE :
 		       endianness == 2 ? SPA_AUDIO_FORMAT_S16_BE :
@@ -255,6 +267,9 @@ sf_format_samplesize(int format)
 
 	switch (sub_type) {
 	case SF_FORMAT_PCM_S8:
+	case SF_FORMAT_PCM_U8:
+	case SF_FORMAT_ULAW:
+	case SF_FORMAT_ALAW:
 		return 1;
 	case SF_FORMAT_PCM_16:
 		return 2;
@@ -269,11 +284,11 @@ sf_format_samplesize(int format)
 	return -1;
 }
 
-static int sf_playback_fill_s8(struct data *d, void *dest, unsigned int n_frames)
+static int sf_playback_fill_x8(struct data *d, void *dest, unsigned int n_frames)
 {
 	sf_count_t rn;
 
-	rn = sf_read_raw(d->file, dest, n_frames);
+	rn = sf_read_raw(d->file, dest, n_frames * d->stride);
 	return (int)rn;
 }
 
@@ -320,7 +335,10 @@ sf_fmt_playback_fill_fn(int format)
 
 	switch (fmt) {
 	case SPA_AUDIO_FORMAT_S8:
-		return sf_playback_fill_s8;
+	case SPA_AUDIO_FORMAT_U8:
+	case SPA_AUDIO_FORMAT_ULAW:
+	case SPA_AUDIO_FORMAT_ALAW:
+		return sf_playback_fill_x8;
 	case SPA_AUDIO_FORMAT_S16_LE:
 	case SPA_AUDIO_FORMAT_S16_BE:
 		/* sndfile check */
@@ -350,11 +368,11 @@ sf_fmt_playback_fill_fn(int format)
 	return NULL;
 }
 
-static int sf_record_fill_s8(struct data *d, void *src, unsigned int n_frames)
+static int sf_record_fill_x8(struct data *d, void *src, unsigned int n_frames)
 {
 	sf_count_t rn;
 
-	rn = sf_write_raw(d->file, src, n_frames);
+	rn = sf_write_raw(d->file, src, n_frames * d->stride);
 	return (int)rn;
 }
 
@@ -401,7 +419,10 @@ sf_fmt_record_fill_fn(int format)
 
 	switch (fmt) {
 	case SPA_AUDIO_FORMAT_S8:
-		return sf_record_fill_s8;
+	case SPA_AUDIO_FORMAT_U8:
+	case SPA_AUDIO_FORMAT_ULAW:
+	case SPA_AUDIO_FORMAT_ALAW:
+		return sf_record_fill_x8;
 	case SPA_AUDIO_FORMAT_S16_LE:
 	case SPA_AUDIO_FORMAT_S16_BE:
 		/* sndfile check */
@@ -829,19 +850,20 @@ on_io_changed(void *userdata, uint32_t id, void *data, uint32_t size)
 	case SPA_IO_Position:
 		d->position = data;
 		break;
+	case SPA_IO_RateMatch:
+		d->rate_match = data;
+		break;
 	default:
 		break;
 	}
 }
 
 static void
-on_param_changed(void *userdata, uint32_t id, const struct spa_pod *format)
+on_param_changed(void *userdata, uint32_t id, const struct spa_pod *param)
 {
 	struct data *data = userdata;
-
 	if (data->verbose)
-		printf("stream param change: id=%"PRIu32"\n",
-				id);
+		printf("stream param change: id=%"PRIu32"\n", id);
 }
 
 static void on_process(void *userdata)
@@ -869,6 +891,8 @@ static void on_process(void *userdata)
 	if (data->mode == mode_playback) {
 
 		n_frames = d->maxsize / data->stride;
+		if (data->rate_match && data->rate_match->size > 0)
+			n_frames = SPA_MIN((uint32_t)n_frames, data->rate_match->size);
 
 		n_fill_frames = data->fill(data, p, n_frames);
 
@@ -932,7 +956,7 @@ static void do_print_delay(void *userdata, uint64_t expirations)
 	struct data *data = userdata;
 	struct pw_time time;
 	pw_stream_get_time(data->stream, &time);
-	printf("now=%li rate=%u/%u ticks=%lu delay=%li queued=%lu\n",
+	printf("now=%"PRIi64" rate=%u/%u ticks=%"PRIu64" delay=%"PRIi64" queued=%"PRIu64"\n",
 		time.now,
 		time.rate.num, time.rate.denom,
 		time.ticks, time.delay, time.queued);
@@ -1155,7 +1179,7 @@ static int setup_midifile(struct data *data)
 
 static int fill_properties(struct data *data)
 {
-	static const char* table[] = {
+	static const char * const table[] = {
 		[SF_STR_TITLE] = PW_KEY_MEDIA_TITLE,
 		[SF_STR_COPYRIGHT] = PW_KEY_MEDIA_COPYRIGHT,
 		[SF_STR_SOFTWARE] = PW_KEY_MEDIA_SOFTWARE,
@@ -1163,6 +1187,7 @@ static int fill_properties(struct data *data)
 		[SF_STR_COMMENT] = PW_KEY_MEDIA_COMMENT,
 		[SF_STR_DATE] = PW_KEY_MEDIA_DATE
 	};
+
 	SF_INFO sfi;
 	SF_FORMAT_INFO fi;
 	int res;
@@ -1339,8 +1364,11 @@ static int setup_sndfile(struct data *data)
 				sf_fmt_to_str(info.format),
 				data->samplesize,
 				data->stride, nom, (double)nom/data->rate);
+
 	if (nom)
 		pw_properties_setf(data->props, PW_KEY_NODE_LATENCY, "%u/%u", nom, data->rate);
+
+	pw_properties_setf(data->props, PW_KEY_NODE_RATE, "1/%u", data->rate);
 
 	if (data->quality >= 0)
 		pw_properties_setf(data->props, "resample.quality", "%d", data->quality);
@@ -1754,8 +1782,7 @@ error_no_context:
 error_no_props:
 error_no_main_loop:
 error_bad_file:
-	if (data.props)
-		pw_properties_free(data.props);
+	pw_properties_free(data.props);
 	if (data.file)
 		sf_close(data.file);
 	if (data.midi.file)

@@ -33,9 +33,7 @@
  * </refsect2>
  */
 
-#ifdef HAVE_CONFIG_H
 #include "config.h"
-#endif
 #include "gstpipewiresrc.h"
 #include "gstpipewireformat.h"
 
@@ -409,7 +407,7 @@ buffer_recycle (GstMiniObject *obj)
   src = data->owner;
   data->queued = TRUE;
 
-  GST_LOG_OBJECT (obj, "recycle buffer");
+  GST_LOG_OBJECT (src, "recycle buffer %p", obj);
   pw_thread_loop_lock (src->core->loop);
   if (src->stream)
     pw_stream_queue_buffer (src->stream, data->b);

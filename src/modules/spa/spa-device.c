@@ -22,9 +22,7 @@
  * DEALINGS IN THE SOFTWARE.
  */
 
-#ifdef HAVE_CONFIG_H
 #include "config.h"
-#endif
 
 #include <string.h>
 #include <stdio.h>
@@ -158,7 +156,6 @@ error_exit_unload:
 	pw_unload_spa_handle(handle);
 error_exit:
 	errno = -res;
-	if (properties)
-		pw_properties_free(properties);
+	pw_properties_free(properties);
 	return NULL;
 }

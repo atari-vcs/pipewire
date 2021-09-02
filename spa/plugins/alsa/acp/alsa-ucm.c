@@ -20,9 +20,7 @@
 
 ***/
 
-#ifdef HAVE_CONFIG_H
-#include <config.h>
-#endif
+#include "config.h"
 
 #include <ctype.h>
 #include <sys/types.h>
@@ -808,12 +806,16 @@ int pa_alsa_ucm_query_profiles(pa_alsa_ucm_config *ucm, int card_index) {
         err = -PA_ALSA_ERR_UCM_NO_VERB;
     }
 
+    snd_use_case_get(ucm->ucm_mgr, "_alibpref", (const char**)&ucm->alibpref);
+
     snd_use_case_free_list(verb_list, num_verbs);
 
 ucm_verb_fail:
     if (err < 0) {
         snd_use_case_mgr_close(ucm->ucm_mgr);
         ucm->ucm_mgr = NULL;
+        free(ucm->alibpref);
+        ucm->alibpref = NULL;
     }
 
 ucm_mgr_fail:
@@ -914,6 +916,8 @@ static void set_eld_devices(pa_hashmap *hash)
             }
         }
         data->eld_device = eld_device;
+        if (data->eld_mixer_device_name)
+            pa_xfree(data->eld_mixer_device_name);
         data->eld_mixer_device_name = pa_xstrdup(eld_mixer_device_name);
     }
 }
@@ -1428,7 +1432,8 @@ static void ucm_add_mapping(pa_alsa_profile *p, pa_alsa_mapping *m) {
     /* create empty path set for the future path additions */
     ps = pa_xnew0(pa_alsa_path_set, 1);
     ps->direction = m->direction;
-    ps->paths = pa_hashmap_new(pa_idxset_trivial_hash_func, pa_idxset_trivial_compare_func);
+    ps->paths = pa_hashmap_new_full(pa_idxset_trivial_hash_func, pa_idxset_trivial_compare_func, pa_xfree,
+                                    (pa_free_cb_t) pa_alsa_path_free);
 
     switch (m->direction) {
         case PA_ALSA_DIRECTION_ANY:
@@ -1523,6 +1528,27 @@ static void alsa_mapping_add_ucm_modifier(pa_alsa_mapping *m, pa_alsa_ucm_modifi
         pa_channel_map_init(&m->channel_map);
 }
 
+static pa_alsa_mapping* ucm_alsa_mapping_get(pa_alsa_ucm_config *ucm, pa_alsa_profile_set *ps, const char *verb_name, const char *device_str, bool is_sink) {
+    pa_alsa_mapping *m;
+    char *mapping_name;
+    size_t ucm_alibpref_len = 0;
+
+    /* find private alsa-lib's configuration device prefix */
+    if (ucm->alibpref != NULL && ucm->alibpref[0] && pa_startswith(device_str, ucm->alibpref))
+        ucm_alibpref_len = strlen(ucm->alibpref);
+
+    mapping_name = pa_sprintf_malloc("Mapping %s: %s: %s", verb_name, device_str + ucm_alibpref_len, is_sink ? "sink" : "source");
+
+    m = pa_alsa_mapping_get(ps, mapping_name);
+
+    if (!m)
+        pa_log("No mapping for %s", mapping_name);
+
+    pa_xfree(mapping_name);
+
+    return m;
+}
+
 static int ucm_create_mapping_direction(
         pa_alsa_ucm_config *ucm,
         pa_alsa_profile_set *ps,
@@ -1534,19 +1560,14 @@ static int ucm_create_mapping_direction(
         bool is_sink) {
 
     pa_alsa_mapping *m;
-    char *mapping_name;
     unsigned priority, rate, channels;
 
-    mapping_name = pa_sprintf_malloc("Mapping %s: %s: %s", verb_name, device_str, is_sink ? "sink" : "source");
+    m = ucm_alsa_mapping_get(ucm, ps, verb_name, device_str, is_sink);
 
-    m = pa_alsa_mapping_get(ps, mapping_name);
-    if (!m) {
-        pa_log("No mapping for %s", mapping_name);
-        pa_xfree(mapping_name);
+    if (!m)
         return -1;
-    }
-    pa_log_debug("UCM mapping: %s dev %s", mapping_name, device_name);
-    pa_xfree(mapping_name);
+
+    pa_log_debug("UCM mapping: %s dev %s", m->name, device_name);
 
     priority = is_sink ? device->playback_priority : device->capture_priority;
     rate = is_sink ? device->playback_rate : device->capture_rate;
@@ -1591,18 +1612,13 @@ static int ucm_create_mapping_for_modifier(
         bool is_sink) {
 
     pa_alsa_mapping *m;
-    char *mapping_name;
 
-    mapping_name = pa_sprintf_malloc("Mapping %s: %s: %s", verb_name, device_str, is_sink ? "sink" : "source");
+    m = ucm_alsa_mapping_get(ucm, ps, verb_name, device_str, is_sink);
 
-    m = pa_alsa_mapping_get(ps, mapping_name);
-    if (!m) {
-        pa_log("no mapping for %s", mapping_name);
-        pa_xfree(mapping_name);
+    if (!m)
         return -1;
-    }
-    pa_log_info("ucm mapping: %s modifier %s", mapping_name, mod_name);
-    pa_xfree(mapping_name);
+
+    pa_log_info("UCM mapping: %s modifier %s", m->name, mod_name);
 
     if (!m->ucm_context.ucm_devices && !m->ucm_context.ucm_modifiers) {   /* new mapping */
         m->ucm_context.ucm_devices = pa_idxset_new(pa_idxset_trivial_hash_func, pa_idxset_trivial_compare_func);
@@ -2022,8 +2038,10 @@ pa_alsa_profile_set* pa_alsa_ucm_add_profile_set(pa_alsa_ucm_config *ucm, pa_cha
     pa_alsa_profile_set *ps;
 
     ps = pa_xnew0(pa_alsa_profile_set, 1);
-    ps->mappings = pa_hashmap_new(pa_idxset_string_hash_func, pa_idxset_string_compare_func);
-    ps->profiles = pa_hashmap_new(pa_idxset_string_hash_func, pa_idxset_string_compare_func);
+    ps->mappings = pa_hashmap_new_full(pa_idxset_string_hash_func, pa_idxset_string_compare_func, NULL,
+                                       (pa_free_cb_t) pa_alsa_mapping_free);
+    ps->profiles = pa_hashmap_new_full(pa_idxset_string_hash_func, pa_idxset_string_compare_func, NULL,
+                                       (pa_free_cb_t) pa_alsa_profile_free);
     ps->decibel_fixes = pa_hashmap_new(pa_idxset_string_hash_func, pa_idxset_string_compare_func);
 
     /* create a profile for each verb */
@@ -2124,6 +2142,8 @@ void pa_alsa_ucm_free(pa_alsa_ucm_config *ucm) {
         snd_use_case_mgr_close(ucm->ucm_mgr);
         ucm->ucm_mgr = NULL;
     }
+    free(ucm->alibpref);
+    ucm->alibpref = NULL;
 }
 
 void pa_alsa_ucm_mapping_context_free(pa_alsa_ucm_mapping_context *context) {
@@ -2284,8 +2304,7 @@ static void ucm_port_data_init(pa_alsa_ucm_port_data *port, pa_alsa_ucm_config *
         device_add_ucm_port(devices[i], port);
     }
 
-    port->paths = pa_hashmap_new_full(pa_idxset_string_hash_func, pa_idxset_string_compare_func, pa_xfree,
-                                      (pa_free_cb_t) pa_alsa_path_free);
+    port->paths = pa_hashmap_new_full(pa_idxset_string_hash_func, pa_idxset_string_compare_func, pa_xfree, NULL);
 
     ucm_port_update_available(port);
 }

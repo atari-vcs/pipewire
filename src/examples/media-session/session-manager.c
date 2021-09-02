@@ -37,9 +37,12 @@
 #include <spa/debug/pod.h>
 
 #include "pipewire/pipewire.h"
-#include "extensions/session-manager.h"
+#include "pipewire/extensions/session-manager.h"
 
 #include "media-session.h"
+
+/** \page page_media_session_module_session_manager Media Session Module: Session Manager
+ */
 
 #define NAME		"session-manager"
 #define SESSION_KEY	"session-manager"

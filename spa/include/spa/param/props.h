@@ -29,6 +29,11 @@
 extern "C" {
 #endif
 
+/**
+ * \addtogroup spa_param
+ * \{
+ */
+
 #include <spa/param/param.h>
 
 /** properties of SPA_TYPE_OBJECT_PropInfo */
@@ -91,6 +96,9 @@ enum spa_prop {
 	SPA_PROP_softVolumes,			/**< a volume array, one volume per
 						  *  channel (Array of Float) */
 
+	SPA_PROP_iec958Codecs,			/**< enabled IEC958 (S/PDIF) codecs,
+						  *  (Array (Id enum spa_audio_iec958_codec) */
+
 	SPA_PROP_START_Video	= 0x20000,	/**< video related properties */
 	SPA_PROP_brightness,
 	SPA_PROP_contrast,
@@ -110,6 +118,10 @@ enum spa_prop {
 
 	SPA_PROP_START_CUSTOM	= 0x1000000,
 };
+
+/**
+ * \}
+ */
 
 #ifdef __cplusplus
 }  /* extern "C" */

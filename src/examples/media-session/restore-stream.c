@@ -41,9 +41,12 @@
 #include <spa/debug/pod.h>
 
 #include "pipewire/pipewire.h"
-#include "extensions/metadata.h"
+#include "pipewire/extensions/metadata.h"
 
 #include "media-session.h"
+
+/** \page page_media_session_module_restore_stream Media Session Module: Restore Stream
+ */
 
 #define NAME		"restore-stream"
 #define SESSION_KEY	"restore-stream"
@@ -244,7 +247,7 @@ static int metadata_property(void *object, uint32_t subject,
 			pw_properties_clear(impl->props);
 			changed = 1;
 		}
-		else if (strstr(key, PREFIX) == key) {
+		else if (spa_strstartswith(key, PREFIX)) {
 			changed += pw_properties_set(impl->props, key, value);
 		}
 	}
@@ -369,8 +372,10 @@ static int restore_stream(struct stream *str)
                                 continue;
 
 			pw_log_info("stream %d: target '%s'", str->obj->obj.id, name);
-			free(str->obj->target_node);
-			str->obj->target_node = strdup(name);
+			if (!str->obj->fixed_target) {
+				free(str->obj->target_node);
+				str->obj->target_node = strdup(name);
+			}
 		} else {
 			if (spa_json_next(&it[1], &value) <= 0)
                                 break;
@@ -408,18 +413,19 @@ static int save_stream(struct stream *str)
 
 static void update_stream(struct stream *str)
 {
-	struct impl *impl = str->impl;
-	uint32_t i;
-	const char *p;
-	char *key;
-	struct sm_object *obj = &str->obj->obj;
-	const char *keys[] = {
+	static const char * const keys[] = {
 		PW_KEY_MEDIA_ROLE,
 		PW_KEY_APP_ID,
 		PW_KEY_APP_NAME,
 		PW_KEY_MEDIA_NAME,
 		PW_KEY_NODE_NAME,
 	};
+
+	struct impl *impl = str->impl;
+	uint32_t i;
+	const char *p;
+	char *key;
+	struct sm_object *obj = &str->obj->obj;
 
 	key = NULL;
 	for (i = 0; i < SPA_N_ELEMENTS(keys); i++) {
@@ -451,7 +457,7 @@ static void object_update(void *data)
 	pw_log_info(NAME" %p: stream %p %08x/%08x", impl, str,
 			str->obj->obj.changed, str->obj->obj.avail);
 
-	if (str->obj->obj.changed & SM_NODE_CHANGE_MASK_PARAMS)
+	if (str->obj->obj.changed & (SM_NODE_CHANGE_MASK_INFO | SM_NODE_CHANGE_MASK_PARAMS))
 		update_stream(str);
 }
 
@@ -471,12 +477,12 @@ static void session_create(void *data, struct sm_object *object)
 	    (media_class = pw_properties_get(object->props, PW_KEY_MEDIA_CLASS)) == NULL)
 		return;
 
-	if (strstr(media_class, "Stream/") == media_class) {
+	if (spa_strstartswith(media_class, "Stream/")) {
 		media_class += strlen("Stream/");
 		pw_log_debug(NAME " %p: add stream '%d' %s", impl, object->id, media_class);
-	} else if (strstr(media_class, "Audio/") == media_class &&
-	    ((routes = pw_properties_get(object->props, "device.routes")) == NULL ||
-	    atoi(routes) == 0)) {
+	} else if (spa_strstartswith(media_class, "Audio/") &&
+		   ((routes = pw_properties_get(object->props, "device.routes")) == NULL ||
+		    atoi(routes) == 0)) {
 		pw_log_debug(NAME " %p: add node '%d' %s", impl, object->id, media_class);
 	} else {
 		return;
@@ -557,8 +563,7 @@ int sm_restore_stream_start(struct sm_media_session *session)
 
 exit_errno:
 	res = -errno;
-	if (impl->props)
-		pw_properties_free(impl->props);
+	pw_properties_free(impl->props);
 	free(impl);
 	return res;
 }

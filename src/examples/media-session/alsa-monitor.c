@@ -52,12 +52,14 @@
 
 #include <pipewire/pipewire.h>
 #include <pipewire/i18n.h>
-#include <extensions/session-manager.h>
+#include <pipewire/extensions/session-manager.h>
 
 #include "media-session.h"
 
 #include "reserve.c"
 
+/** \page page_media_session_module_alsa_monitor Media Session Module: ALSA Monitor
+ */
 #define SESSION_CONF	"alsa-monitor.conf"
 
 #define DEFAULT_JACK_SECONDS	1
@@ -321,9 +323,9 @@ static struct node *alsa_create_node(struct device *device, uint32_t id,
 	priority -= atol(dev) * 16;
 	priority -= atol(subdev);
 
-	if (strstr(profile, "analog-") == profile)
+	if (spa_strstartswith(profile, "analog-"))
 		priority += 9;
-	else if (strstr(profile, "iec958-") == profile)
+	else if (spa_strstartswith(profile, "iec958-"))
 		priority += 8;
 
 	if (pw_properties_get(node->props, PW_KEY_PRIORITY_DRIVER) == NULL) {
@@ -356,7 +358,7 @@ static struct node *alsa_create_node(struct device *device, uint32_t id,
 
 		if ((devname = pw_properties_get(device->props, SPA_KEY_DEVICE_NAME)) == NULL)
 			devname = "unnamed-device";
-		if (strstr(devname, "alsa_card.") == devname)
+		if (spa_strstartswith(devname, "alsa_card."))
 			devname += 10;
 
 		pw_properties_set(node->props, SPA_KEY_NODE_NAME,
@@ -1157,10 +1159,8 @@ int sm_alsa_monitor_start(struct sm_media_session *session)
 out_free:
 	if (impl->handle)
 		pw_unload_spa_handle(impl->handle);
-	if (impl->conf)
-		pw_properties_free(impl->conf);
-	if (impl->props)
-		pw_properties_free(impl->props);
+	pw_properties_free(impl->conf);
+	pw_properties_free(impl->props);
 	free(impl);
 	return res;
 }

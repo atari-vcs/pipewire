@@ -34,6 +34,23 @@ extern "C" {
 
 #include <spa/utils/hook.h>
 
+/** \defgroup pw_core The PipeWire Core Global Object
+ *
+ * \brief The core global object.
+ *
+ * This is a special singleton object. It is used for internal PipeWire
+ * protocol features. Connecting to a PipeWire instance returns one core
+ * object, the caller should then register event listeners
+ * using \ref pw_core_add_listener.
+ *
+ * Updates to the core object are then provided through the \ref
+ * pw_core_events interface. See \ref page_tutorial2 for an example.
+ */
+
+/**
+ * \addtogroup pw_core
+ * \{
+ */
 #define PW_TYPE_INTERFACE_Core		PW_TYPE_INFO_INTERFACE_BASE "Core"
 #define PW_TYPE_INTERFACE_Registry	PW_TYPE_INFO_INTERFACE_BASE "Registry"
 
@@ -42,16 +59,17 @@ struct pw_core;
 #define PW_VERSION_REGISTRY	3
 struct pw_registry;
 
-/* the default remote name to connect to */
+/** The default remote name to connect to */
 #define PW_DEFAULT_REMOTE	"pipewire-0"
 
-/* default ID for the core object after connect */
+/** default ID for the core object after connect */
 #define PW_ID_CORE		0
 
 /* invalid ID that matches any object when used for permissions */
 #define PW_ID_ANY		(uint32_t)(0xffffffff)
 
-/**  The core information. Extra information can be added in later versions \memberof pw_introspect */
+/**  The core information. Extra information may be added in later versions,
+ * clients must not assume a constant struct size */
 struct pw_core_info {
 	uint32_t id;			/**< id of the global */
 	uint32_t cookie;		/**< a random cookie for identifying this instance of PipeWire */
@@ -69,22 +87,13 @@ struct pw_core_info {
 #include <pipewire/properties.h>
 #include <pipewire/proxy.h>
 
-/** Update and existing \ref pw_core_info with \a update  \memberof pw_introspect */
+/** Update and existing \ref pw_core_info with \a update */
 struct pw_core_info *
 pw_core_info_update(struct pw_core_info *info,
 		    const struct pw_core_info *update);
 
-/** Free a \ref pw_core_info  \memberof pw_introspect */
+/** Free a \ref pw_core_info  */
 void pw_core_info_free(struct pw_core_info *info);
-
-/**
- * \page page_iface_pw_core pw_core
- * \section page_iface_pw_core_desc Description
- *
- * The core global object.  This is a special singleton object.  It
- * is used for internal PipeWire protocol features.
- * \section page_iface_pw_core API
- */
 
 /** Core */
 
@@ -372,12 +381,14 @@ pw_core_create_object(struct pw_core *core,
 
 #define pw_core_destroy(c,...)		pw_core_method(c,destroy,0,__VA_ARGS__)
 
-/** \page page_registry Registry
- *
- * \section page_registry_overview Overview
+/**
+ * \}
+ */
+
+/** \defgroup pw_registry Registry
  *
  * The registry object is a singleton object that keeps track of
- * global objects on the PipeWire instance. See also \ref page_global.
+ * global objects on the PipeWire instance. See also \ref pw_global.
  *
  * Global objects typically represent an actual object in PipeWire
  * (for example, a module or node) or they are singleton
@@ -402,6 +413,11 @@ pw_core_create_object(struct pw_core *core,
  * pipewire session before handing it to another application. You
  * can, for example, hide certain existing or new objects or limit
  * the access permissions on an object.
+ */
+
+/**
+ * \addtogroup pw_registry
+ * \{
  */
 
 #define PW_REGISTRY_EVENT_GLOBAL             0
@@ -504,34 +520,58 @@ pw_registry_bind(struct pw_registry *registry,
 
 #define pw_registry_destroy(p,...)	pw_registry_method(p,destroy,0,__VA_ARGS__)
 
+/**
+ * \}
+ */
 
-/** Connect to a PipeWire instance \memberof pw_core
- * \return a pw_core on success or NULL with errno set on error. The core
- * will have an id of PW_ID_CORE (0) */
+/**
+ * \addtogroup pw_core
+ * \{
+ */
+
+/** Connect to a PipeWire instance
+ *
+ * \param context a \ref pw_context
+ * \param properties optional properties, ownership of the properties is
+ *	taken.
+ * \param user_data_size extra user data size
+ *
+ * \return a \ref pw_core on success or NULL with errno set on error. The core
+ * will have an id of \ref PW_ID_CORE (0)
+ */
 struct pw_core *
-pw_context_connect(struct pw_context *context,		/**< a \ref pw_context */
-	      struct pw_properties *properties,	/**< optional properties, ownership of
-						  *  the properties is taken.*/
-	      size_t user_data_size		/**< extra user data size */);
+pw_context_connect(struct pw_context *context,
+	      struct pw_properties *properties,
+	      size_t user_data_size);
 
-/** Connect to a PipeWire instance on the given socket \memberof pw_core
+/** Connect to a PipeWire instance on the given socket
+ *
+ * \param context a \ref pw_context
  * \param fd the connected socket to use, the socket will be closed
  *	automatically on disconnect or error.
- * \return a pw_core on success or NULL with errno set on error */
+ * \param properties optional properties, ownership of the properties is
+ *	taken.
+ * \param user_data_size extra user data size
+ *
+ * \return a \ref pw_core on success or NULL with errno set on error */
 struct pw_core *
-pw_context_connect_fd(struct pw_context *context,	/**< a \ref pw_context */
-	      int fd,				/**< an fd */
-	      struct pw_properties *properties,	/**< optional properties, ownership of
-						  *  the properties is taken.*/
-	      size_t user_data_size		/**< extra user data size */);
+pw_context_connect_fd(struct pw_context *context,
+	      int fd,
+	      struct pw_properties *properties,
+	      size_t user_data_size);
 
-/** Connect to a given PipeWire instance \memberof pw_core
- * \return a pw_core on success or NULL with errno set on error */
+/** Connect to a given PipeWire instance
+ *
+ * \param context a \ref pw_context to connect to
+ * \param properties optional properties, ownership of the properties is
+ *	taken.
+ * \param user_data_size extra user data size
+ *
+ * \return a \ref pw_core on success or NULL with errno set on error */
 struct pw_core *
-pw_context_connect_self(struct pw_context *context,	/**< a \ref pw_context to connect to */
-	      struct pw_properties *properties,	/**< optional properties, ownership of
-						  *  the properties is taken.*/
-	      size_t user_data_size		/**< extra user data size */);
+pw_context_connect_self(struct pw_context *context,
+	      struct pw_properties *properties,
+	      size_t user_data_size);
 
 /** Steal the fd of the core connection or < 0 on error. The core
   * will be disconnected after this call. */
@@ -576,6 +616,9 @@ struct pw_proxy *pw_core_export(struct pw_core *core,			/**< the core */
 				  void *object,				/**< object to export */
 				  size_t user_data_size			/**< extra user data */);
 
+/**
+ * \}
+ */
 
 #ifdef __cplusplus
 }
