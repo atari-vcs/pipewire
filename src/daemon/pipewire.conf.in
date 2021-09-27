@@ -1,4 +1,7 @@
 # Daemon config file for PipeWire version @VERSION@ #
+#
+# Copy and edit this file in @PIPEWIRE_CONFIG_DIR@ for systemwide changes
+# or in ~/.config/pipewire for local changes.
 
 context.properties = {
     ## Configure properties in the system.
@@ -17,14 +20,15 @@ context.properties = {
     core.name                              = pipewire-0               # core name and socket name
 
     ## Properties for the DSP configuration.
-    #default.clock.rate        = 48000
-    #default.clock.quantum     = 1024
-    #default.clock.min-quantum = 32
-    #default.clock.max-quantum = 8192
-    #default.video.width       = 640
-    #default.video.height      = 480
-    #default.video.rate.num    = 25
-    #default.video.rate.denom  = 1
+    #default.clock.rate          = 48000
+    #default.clock.allowed-rates = [ 48000 ]
+    #default.clock.quantum       = 1024
+    #default.clock.min-quantum   = 32
+    #default.clock.max-quantum   = 8192
+    #default.video.width         = 640
+    #default.video.height        = 480
+    #default.video.rate.num      = 25
+    #default.video.rate.denom    = 1
     #
     # These overrides are only applied when running in a vm.
     vm.overrides = {
@@ -67,11 +71,22 @@ context.modules = [
         args = {
             #nice.level   = -11
             #rt.prio      = 88
-            #rt.time.soft = 200000
-            #rt.time.hard = 200000
+            #rt.time.soft = 2000000
+            #rt.time.hard = 2000000
         }
         flags = [ ifexists nofail ]
     }
+
+    # Set thread priorities without using RTKit.
+    #{   name = libpipewire-module-rt
+    #    args = {
+    #        nice.level   = -11
+    #        rt.prio      = 88
+    #        rt.time.soft = 2000000
+    #        rt.time.hard = 2000000
+    #    }
+    #    flags = [ ifexists nofail ]
+    #}
 
     # The native communication protocol.
     {   name = libpipewire-module-protocol-native }
@@ -116,7 +131,7 @@ context.modules = [
             # access.allowed to list an array of paths of allowed
             # apps.
             #access.allowed = [
-            #    @media_session_path@
+            #    @session_manager_path@
             #]
 
             # An array of rejected paths.
@@ -154,7 +169,7 @@ context.objects = [
     #{ factory = spa-node-factory args = { factory.name = videotestsrc node.name = videotestsrc Spa:Pod:Object:Param:Props:patternType = 1 } }
     #{ factory = spa-device-factory args = { factory.name = api.jack.device foo=bar } flags = [ nofail ] }
     #{ factory = spa-device-factory args = { factory.name = api.alsa.enum.udev } }
-    #{ factory = spa-device-factory args = { factory.name = api.alsa.seq.bridge node.name = Internal-MIDI-Bridge } }
+    #{ factory = spa-node-factory   args = { factory.name = api.alsa.seq.bridge node.name = Internal-MIDI-Bridge } }
     #{ factory = adapter            args = { factory.name = audiotestsrc node.name = my-test } }
     #{ factory = spa-node-factory   args = { factory.name = api.vulkan.compute.source node.name = my-compute-source } }
 
@@ -220,7 +235,7 @@ context.exec = [
     # but it is better to start it as a systemd service.
     # Run the session manager with -h for options.
     #
-    @comment@{ path = "@media_session_path@"  args = "" }
+    @comment@{ path = "@session_manager_path@"  args = "@session_manager_args@" }
     #
     # You can optionally start the pulseaudio-server here as well
     # but it is better to start it as a systemd service.

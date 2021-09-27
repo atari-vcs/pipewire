@@ -155,6 +155,20 @@ static void flush_items(struct impl *impl)
 }
 
 static int
+loop_invoke_inthread(struct impl *impl,
+	    spa_invoke_func_t func,
+	    uint32_t seq,
+	    const void *data,
+	    size_t size,
+	    bool block,
+	    void *user_data)
+{
+	if (!impl->flushing)
+		flush_items(impl);
+	return func ? func(&impl->loop, true, seq, data, size, user_data) : 0;
+}
+
+static int
 loop_invoke(void *object,
 	    spa_invoke_func_t func,
 	    uint32_t seq,
@@ -164,11 +178,13 @@ loop_invoke(void *object,
 	    void *user_data)
 {
 	struct impl *impl = object;
-	bool in_thread = pthread_equal(impl->thread, pthread_self());
 	struct invoke_item *item;
 	int res;
 	int32_t filled;
 	uint32_t avail, idx, offset, l0;
+
+	if (pthread_equal(impl->thread, pthread_self()))
+		return loop_invoke_inthread(impl, func, seq, data, size, block, user_data);
 
 	filled = spa_ringbuffer_get_write_index(&impl->buffer, &idx);
 	if (filled < 0 || filled > DATAS_SIZE) {
@@ -182,39 +198,47 @@ loop_invoke(void *object,
 	}
 	offset = idx & (DATAS_SIZE - 1);
 
+	/* l0 is remaining size in ringbuffer, this should always be larger than
+	 * invoke_item, see below */
 	l0 = DATAS_SIZE - offset;
 
 	item = SPA_PTROFF(impl->buffer_data, offset, struct invoke_item);
 	item->func = func;
 	item->seq = seq;
 	item->size = size;
-	item->block = block && !in_thread;
+	item->block = block;
 	item->user_data = user_data;
+	item->item_size = SPA_ROUND_UP_N(sizeof(struct invoke_item) + size, 8);
 
 	spa_log_trace(impl->log, NAME " %p: add item %p filled:%d", impl, item, filled);
 
-	if (l0 > sizeof(struct invoke_item) + size) {
+	if (l0 >= item->item_size) {
+		/* item + size fit in current ringbuffer idx */
 		item->data = SPA_PTROFF(item, sizeof(struct invoke_item), void);
-		item->item_size = SPA_ROUND_UP_N(sizeof(struct invoke_item) + size, 8);
-		if (l0 < sizeof(struct invoke_item) + item->item_size)
+		if (l0 < sizeof(struct invoke_item) + item->item_size) {
+			/* not enough space for next invoke_item, fill up till the end
+			 * so that the next item will be at the start */
 			item->item_size = l0;
+		}
 	} else {
+		/* item does not fit, place the invoke_item at idx and start the
+		 * data at the start of the ringbuffer */
 		item->data = impl->buffer_data;
 		item->item_size = SPA_ROUND_UP_N(l0 + size, 8);
+	}
+	if (avail < item->item_size) {
+		spa_log_warn(impl->log, NAME " %p: queue full %d, need %zd", impl, avail,
+				item->item_size);
+		return -EPIPE;
 	}
 	if (data && size > 0)
 		memcpy(item->data, data, size);
 
 	spa_ringbuffer_write_update(&impl->buffer, idx + item->item_size);
 
-	if (in_thread) {
-		if (!impl->flushing)
-			flush_items(impl);
-	} else {
-		loop_signal_event(impl, impl->wakeup);
-	}
+	loop_signal_event(impl, impl->wakeup);
 
-	if (block && !in_thread) {
+	if (block) {
 		uint64_t count = 1;
 
 		spa_loop_control_hook_before(&impl->hooks_list);

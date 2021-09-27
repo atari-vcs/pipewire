@@ -29,6 +29,10 @@
 extern "C" {
 #endif
 
+/**
+ * \addtogroup spa_param
+ * \{
+ */
 enum spa_bluetooth_audio_codec {
 	SPA_BLUETOOTH_AUDIO_CODEC_START,
 
@@ -40,11 +44,19 @@ enum spa_bluetooth_audio_codec {
 	SPA_BLUETOOTH_AUDIO_CODEC_APTX,
 	SPA_BLUETOOTH_AUDIO_CODEC_APTX_HD,
 	SPA_BLUETOOTH_AUDIO_CODEC_LDAC,
+	SPA_BLUETOOTH_AUDIO_CODEC_APTX_LL,
+	SPA_BLUETOOTH_AUDIO_CODEC_APTX_LL_DUPLEX,
+	SPA_BLUETOOTH_AUDIO_CODEC_FASTSTREAM,
+	SPA_BLUETOOTH_AUDIO_CODEC_FASTSTREAM_DUPLEX,
 
 	/* HFP */
 	SPA_BLUETOOTH_AUDIO_CODEC_CVSD = 0x100,
 	SPA_BLUETOOTH_AUDIO_CODEC_MSBC,
 };
+
+/**
+ * \}
+ */
 
 #ifdef __cplusplus
 }  /* extern "C" */

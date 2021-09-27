@@ -83,6 +83,7 @@ struct mix {
 	unsigned int valid:1;
 	uint32_t id;
 	struct port *port;
+	uint32_t peer_id;
 	uint32_t n_buffers;
 	struct buffer buffers[MAX_BUFFERS];
 };
@@ -188,6 +189,8 @@ struct impl {
 	pw_client_node_resource(r,port_set_io,0,__VA_ARGS__)
 #define pw_client_node_resource_set_activation(r,...)	\
 	pw_client_node_resource(r,set_activation,0,__VA_ARGS__)
+#define pw_client_node_resource_port_set_mix_info(r,...)	\
+	pw_client_node_resource(r,port_set_mix_info,1,__VA_ARGS__)
 
 static int
 do_port_use_buffers(struct impl *impl,
@@ -386,8 +389,7 @@ static int impl_node_set_io(void *object, uint32_t id, void *data, size_t size)
 		memid = SPA_ID_INVALID;
 		mem_offset = mem_size = 0;
 	}
-	if (old != NULL)
-		pw_memmap_free(old);
+	pw_memmap_free(old);
 
 	if (this->resource == NULL)
 		return data == NULL ? 0 : -EIO;
@@ -497,8 +499,7 @@ do_update_port(struct node *this,
 	}
 
 	if (change_mask & PW_CLIENT_NODE_PORT_UPDATE_INFO) {
-		if (port->properties)
-			pw_properties_free(port->properties);
+		pw_properties_free(port->properties);
 		port->properties = NULL;
 		port->info.props = NULL;
 		port->info.n_params = 0;
@@ -707,8 +708,7 @@ static int do_port_set_io(struct impl *impl,
 		memid = SPA_ID_INVALID;
 		mem_offset = mem_size = 0;
 	}
-	if (old != NULL)
-		pw_memmap_free(old);
+	pw_memmap_free(old);
 
 	if (this->resource == NULL)
 		return data == NULL ? 0 : -EIO;
@@ -869,6 +869,10 @@ do_port_use_buffers(struct impl *impl,
 	}
 	mix->n_buffers = n_buffers;
 
+	if (this->resource->version >= 4)
+		pw_client_node_resource_port_set_mix_info(this->resource,
+						 direction, port_id, mix_id,
+						 mix->peer_id, NULL);
 	return pw_client_node_resource_port_use_buffers(this->resource,
 						 direction, port_id, mix_id, flags,
 						 n_buffers, mb);
@@ -1101,7 +1105,7 @@ static int client_node_port_buffers(void *data,
 	return 0;
 }
 
-static struct pw_client_node_methods client_node_methods = {
+static const struct pw_client_node_methods client_node_methods = {
 	PW_VERSION_CLIENT_NODE_METHODS,
 	.get_node = client_node_get_node,
 	.update = client_node_update,
@@ -1378,6 +1382,8 @@ static int port_init_mix(void *data, struct pw_impl_port_mix *mix)
 	mix->io = SPA_PTROFF(impl->io_areas->map->ptr,
 			mix->id * sizeof(struct spa_io_buffers), void);
 	*mix->io = SPA_IO_BUFFERS_INIT;
+
+	m->peer_id = mix->peer_id;
 
 	pw_log_debug(NAME " %p: init mix id:%d io:%p base:%p", impl,
 			mix->id, mix->io, impl->io_areas->map->ptr);
@@ -1660,14 +1666,6 @@ static const struct pw_resource_events resource_events = {
 	.pong = client_node_resource_pong,
 };
 
-static int process_node(void *data)
-{
-	struct impl *impl = data;
-	struct node *this = &impl->node;
-	pw_log_trace_fp(NAME " %p: process", this);
-	return spa_node_process(&this->node);
-}
-
 /** Create a new client node
  * \param client an owner \ref pw_client
  * \param id an id
@@ -1735,9 +1733,6 @@ struct pw_impl_client_node *pw_impl_client_node_new(struct pw_resource *resource
 	this->node->remote = true;
 	this->flags = 0;
 
-	this->node->rt.target.signal = process_node;
-	this->node->rt.target.data = impl;
-
 	pw_resource_add_listener(this->resource,
 				&impl->resource_listener,
 				&resource_events,
@@ -1764,8 +1759,7 @@ error_exit_free:
 error_exit_cleanup:
 	if (resource)
 		pw_resource_destroy(resource);
-	if (properties)
-		pw_properties_free(properties);
+	pw_properties_free(properties);
 	errno = -res;
 	return NULL;
 }

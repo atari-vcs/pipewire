@@ -37,7 +37,6 @@
 #include "registry.h"
 
 #define DEFAULT_FILE_NAME "/tmp/music.output"
-#define DEFAULT_SINK_NAME "fifo_output"
 
 struct module_pipesink_data {
 	struct module *module;
@@ -178,9 +177,6 @@ static int module_pipesink_load(struct client *client, struct module *module)
 			params, n_params)) < 0)
 		return res;
 
-	pw_log_info("loaded module %p id:%u name:%s", module, module->idx, module->name);
-	module_emit_loaded(module, 0);
-
 	return 0;
 }
 
@@ -188,10 +184,7 @@ static int module_pipesink_unload(struct client *client, struct module *module)
 {
 	struct module_pipesink_data *d = module->user_data;
 
-	pw_log_info("unload module %p id:%u name:%s", module, module->idx, module->name);
-
-	if (d->capture_props != NULL)
-		pw_properties_free(d->capture_props);
+	pw_properties_free(d->capture_props);
 	if (d->capture != NULL)
 		pw_stream_destroy(d->capture);
 	if (d->core != NULL)
@@ -260,9 +253,6 @@ struct module *create_module_pipe_sink(struct impl *impl, const char *argument)
 	if ((str = pw_properties_get(props, "sink_name")) != NULL) {
 		pw_properties_set(capture_props, PW_KEY_NODE_NAME, str);
 		pw_properties_set(props, "sink_name", NULL);
-	} else {
-		pw_properties_set(capture_props, PW_KEY_NODE_NAME, DEFAULT_SINK_NAME);
-		pw_properties_set(props, "sink_name", NULL);
 	}
 
 	if ((str = pw_properties_get(props, "file")) != NULL) {
@@ -275,7 +265,8 @@ struct module *create_module_pipe_sink(struct impl *impl, const char *argument)
 	do_unlink_fifo = false;
 	if (mkfifo(filename, 0666) < 0) {
 		if (errno != EEXIST) {
-			pw_log_error("mkfifo('%s'): %s", filename, spa_strerror(errno));
+			res = -errno;
+			pw_log_error("mkfifo('%s'): %s", filename, spa_strerror(res));
 			goto out;
 		}
 	} else {
@@ -285,16 +276,18 @@ struct module *create_module_pipe_sink(struct impl *impl, const char *argument)
 		 * requested permissions. Let's fix the permissions with chmod().
 		 */
 		if (chmod(filename, 0666) < 0)
-			pw_log_warn("chmod('%s'): %s", filename, spa_strerror(errno));
+			pw_log_warn("chmod('%s'): %s", filename, spa_strerror(-errno));
 	}
 
 	if ((fd = open(filename, O_RDWR | O_CLOEXEC | O_NONBLOCK, 0)) <= 0) {
-        	pw_log_error("open('%s'): %s", filename, spa_strerror(errno));
+		res = -errno;
+		pw_log_error("open('%s'): %s", filename, spa_strerror(res));
 		goto out;
 	}
 
 	if (fstat(fd, &st) < 0) {
-		pw_log_error("fstat('%s'): %s", filename, spa_strerror(errno));
+		res = -errno;
+		pw_log_error("fstat('%s'): %s", filename, spa_strerror(res));
 		goto out;
 	}
 
@@ -303,8 +296,11 @@ struct module *create_module_pipe_sink(struct impl *impl, const char *argument)
 		goto out;
 	}
 
-	if ((str = pw_properties_get(props, PW_KEY_MEDIA_CLASS)) == NULL)
-		pw_properties_set(props, PW_KEY_MEDIA_CLASS, "Audio/Sink");
+	if (pw_properties_get(capture_props, PW_KEY_NODE_GROUP) == NULL)
+		pw_properties_set(capture_props, PW_KEY_NODE_GROUP, "pipewire.dummy");
+	if (pw_properties_get(capture_props, PW_KEY_NODE_VIRTUAL) == NULL)
+		pw_properties_set(capture_props, PW_KEY_NODE_VIRTUAL, "true");
+	pw_properties_set(capture_props, PW_KEY_MEDIA_CLASS, "Audio/Sink");
 
 	module = module_new(impl, &module_pipesink_methods, sizeof(*d));
 	if (module == NULL) {
@@ -325,10 +321,8 @@ struct module *create_module_pipe_sink(struct impl *impl, const char *argument)
 
 	return module;
 out:
-	if (props)
-		pw_properties_free(props);
-	if (capture_props)
-		pw_properties_free(capture_props);
+	pw_properties_free(props);
+	pw_properties_free(capture_props);
 	if (filename) {
 		if (do_unlink_fifo)
 			unlink(filename);

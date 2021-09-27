@@ -45,6 +45,40 @@
 #include "pipewire/utils.h"
 #include "pipewire/private.h"
 
+/** \page page_module_portal PipeWire Module: Portal
+ *
+ * The `portal` module performs access control management for clients started
+ * inside an XDG portal.
+ *
+ * The module connects to the session DBus and subscribes to
+ * `NameOwnerChanged` signals for the `org.freedesktop.portal.Desktop` name.
+ * The PID of the DBus name owner is the portal.
+ *
+ * A client connection from the portal PID to PipeWire gets assigned a \ref
+ * PW_KEY_ACCESS of `"portal"` and set to permissions ALL - it is the
+ * responsibility of the portal to limit the permissions before passing the
+ * connection on to the client. See \ref page_access for details on
+ * permissions.
+ *
+ * Clients connecting from other PIDs are ignored by this module.
+ *
+ * ## Module Options
+ *
+ * There are no module-specific options.
+ *
+ * ## General options
+ *
+ * There are no general options for this module.
+ *
+ * ## Example configuration
+ *\code{.unparsed}
+ * context.modules = [
+ *  {   name = libpipewire-portal }
+ * ]
+ *\endcode
+ *
+ */
+
 #define NAME "portal"
 
 struct impl {
@@ -80,8 +114,7 @@ context_check_access(void *data, struct pw_impl_client *client)
 	if ((str = pw_properties_get(props, PW_KEY_SEC_PID)) == NULL)
 		return;
 
-	pid = atoi(str);
-	if (pid != impl->portal_pid)
+	if (!spa_atoi32(str, &pid, 10) || pid != impl->portal_pid)
 		return;
 
 	items[0] = SPA_DICT_ITEM_INIT(PW_KEY_ACCESS, "portal");
@@ -108,10 +141,11 @@ static void module_destroy(void *data)
 	spa_hook_remove(&impl->context_listener);
 	spa_hook_remove(&impl->module_listener);
 
+	if (impl->bus)
+		dbus_connection_unref(impl->bus);
 	spa_dbus_connection_destroy(impl->conn);
 
-	if (impl->properties)
-		pw_properties_free(impl->properties);
+	pw_properties_free(impl->properties);
 
 	free(impl);
 }
@@ -173,7 +207,7 @@ static void update_portal_pid(struct impl *impl)
 	impl->portal_pid = 0;
 
 	m = dbus_message_new_method_call("org.freedesktop.DBus",
-					 "/",
+					 "/org/freedesktop/DBus",
 					 "org.freedesktop.DBus",
 					 "GetConnectionUnixProcessID");
 
@@ -237,6 +271,9 @@ static int init_dbus_connection(struct impl *impl)
 	impl->bus = spa_dbus_connection_get(impl->conn);
 	if (impl->bus == NULL)
 		return -EIO;
+
+	/* XXX: we don't handle dbus reconnection yet, so ref the handle instead */
+	dbus_connection_ref(impl->bus);
 
 	dbus_error_init(&error);
 
@@ -302,6 +339,6 @@ int pipewire__module_init(struct pw_impl_module *module, const char *args)
 
       error:
 	free(impl);
-	pw_log_error("Failed to connect to system bus: %s", spa_strerror(res));
+	pw_log_error("Failed to connect to session bus: %s", spa_strerror(res));
 	return res;
 }

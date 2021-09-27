@@ -30,6 +30,8 @@ extern "C" {
 #endif
 
 /**
+ * \defgroup pw_keys PipeWire Keys
+ *
  * A collection of keys that are used to add extra information on objects.
  *
  * Keys that start with "pipewire." are in general set-once and then
@@ -38,6 +40,9 @@ extern "C" {
  *
  * Properties from other objects can also appear. This usually suggests some
  * sort of parent/child or owner/owned relationship.
+ *
+ * \addtogroup pw_keys
+ * \{
  */
 #define PW_KEY_PROTOCOL			"pipewire.protocol"	/**< protocol used for connection */
 #define PW_KEY_ACCESS			"pipewire.access"	/**< how the client access is controlled */
@@ -56,8 +61,13 @@ extern "C" {
 #define PW_KEY_LIBRARY_NAME_LOOP	"library.name.loop"	/**< name of the loop library to use */
 #define PW_KEY_LIBRARY_NAME_DBUS	"library.name.dbus"	/**< name of the dbus library to use */
 
+/** object properties */
 #define PW_KEY_OBJECT_PATH		"object.path"		/**< unique path to construct the object */
 #define PW_KEY_OBJECT_ID		"object.id"		/**< a global object id */
+#define PW_KEY_OBJECT_LINGER		"object.linger"		/**< the object lives on even after the client
+								  *  that created it has been destroyed */
+#define PW_KEY_OBJECT_REGISTER		"object.register"	/**< If the object should be registered. */
+
 
 /* config */
 #define PW_KEY_CONFIG_PREFIX		"config.prefix"		/**< a config prefix directory */
@@ -70,7 +80,7 @@ extern "C" {
 
 /* core */
 #define PW_KEY_CORE_NAME		"core.name"		/**< The name of the core. Default is
-								  *  pipewire-<user-name>-<pid>, overwritten
+								  *  `pipewire-<username>-<pid>`, overwritten
 								  *  by env(PIPEWIRE_CORE) */
 #define PW_KEY_CORE_VERSION		"core.version"		/**< The version of the core. */
 #define PW_KEY_CORE_DAEMON		"core.daemon"		/**< If the core is listening for connections. */
@@ -145,8 +155,17 @@ extern "C" {
 								  *  a fraction. Ex: 128/48000 */
 #define PW_KEY_NODE_MAX_LATENCY		"node.max-latency"	/**< the maximum supported latency of the
 								  *  node as a fraction. Ex: 1024/48000 */
+#define PW_KEY_NODE_LOCK_QUANTUM	"node.lock-quantum"	/**< don't change quantum when this node
+								  *  is active */
+#define PW_KEY_NODE_RATE		"node.rate"		/**< the requested rate of the graph as
+								  *  a fraction. Ex: 1/48000 */
+#define PW_KEY_NODE_LOCK_RATE		"node.lock-rate"	/**< don't change rate when this node
+								  *  is active */
+
 #define PW_KEY_NODE_DONT_RECONNECT	"node.dont-reconnect"	/**< don't reconnect this node */
 #define PW_KEY_NODE_ALWAYS_PROCESS	"node.always-process"	/**< process even when unlinked */
+#define PW_KEY_NODE_WANT_DRIVER		"node.want-driver"	/**< the node wants to be grouped with a driver
+								  *  node in order to schedule the graph. */
 #define PW_KEY_NODE_PAUSE_ON_IDLE	"node.pause-on-idle"	/**< pause the node when idle */
 #define PW_KEY_NODE_CACHE_PARAMS	"node.cache-params"	/**< cache the node params */
 #define PW_KEY_NODE_DRIVER		"node.driver"		/**< node can drive the graph */
@@ -157,6 +176,8 @@ extern "C" {
 #define PW_KEY_NODE_PASSIVE		"node.passive"		/**< indicate that a node wants passive links
 								  *  on output/input/all ports when the value is
 								  *  "out"/"in"/"true" respectively */
+#define PW_KEY_NODE_LINK_GROUP		"node.link-group"	/**< the node is internally linked to
+								  *  nodes with the same link-group */
 
 /** Port keys */
 #define PW_KEY_PORT_ID			"port.id"		/**< port id */
@@ -252,10 +273,6 @@ extern "C" {
 #define PW_KEY_STREAM_CAPTURE_SINK	"stream.capture.sink"	/**< Try to capture the sink output instead of
 								  *  source output */
 
-/** object properties */
-#define PW_KEY_OBJECT_LINGER		"object.linger"		/**< the object lives on even after the client
-								  *  that created it has been destroyed */
-
 /** Media */
 #define PW_KEY_MEDIA_TYPE		"media.type"		/**< Media type, one of
 								  *  Audio, Video, Midi */
@@ -286,7 +303,7 @@ extern "C" {
 								  *  Ex: "32 bit float mono audio" */
 /** audio related properties */
 #define PW_KEY_AUDIO_CHANNEL		"audio.channel"		/**< an audio channel. Ex: "FL" */
-#define PW_KEY_AUDIO_RATE		"audio.samplerate"	/**< an audio samplerate */
+#define PW_KEY_AUDIO_RATE		"audio.rate"		/**< an audio samplerate */
 #define PW_KEY_AUDIO_CHANNELS		"audio.channels"	/**< number of audio channels */
 #define PW_KEY_AUDIO_FORMAT		"audio.format"		/**< an audio format. Ex: "S16LE" */
 
@@ -298,6 +315,9 @@ extern "C" {
 #ifdef PW_ENABLE_DEPRECATED
 #define PW_KEY_PRIORITY_MASTER		"priority.master"	/**< deprecated */
 #endif /* PW_ENABLE_DEPRECATED */
+
+/** \}
+ */
 
 #ifdef __cplusplus
 }

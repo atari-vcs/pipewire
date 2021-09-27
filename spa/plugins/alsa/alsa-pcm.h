@@ -33,6 +33,7 @@ extern "C" {
 #include <math.h>
 
 #include <alsa/asoundlib.h>
+#include <alsa/use-case.h>
 
 #include <spa/support/plugin.h>
 #include <spa/support/loop.h>
@@ -45,6 +46,7 @@ extern "C" {
 #include <spa/node/io.h>
 #include <spa/debug/types.h>
 #include <spa/param/param.h>
+#include <spa/param/latency-utils.h>
 #include <spa/param/audio/format-utils.h>
 
 #include "dll.h"
@@ -93,6 +95,7 @@ struct state {
 	struct spa_system *data_system;
 	struct spa_loop *data_loop;
 
+	int card_index;
 	snd_pcm_stream_t stream;
 	snd_output_t *output;
 
@@ -101,7 +104,12 @@ struct state {
 
 	uint64_t info_all;
 	struct spa_node_info info;
-	struct spa_param_info params[8];
+#define NODE_PropInfo		0
+#define NODE_Props		1
+#define NODE_IO			2
+#define NODE_ProcessLatency	3
+#define N_NODE_PARAMS		4
+	struct spa_param_info params[N_NODE_PARAMS];
 	struct props props;
 
 	bool opened;
@@ -128,13 +136,21 @@ struct state {
 	int channels;
 	size_t frame_size;
 	int blocks;
-	int rate_denom;
+	uint32_t rate_denom;
 	uint32_t delay;
 	uint32_t read_size;
 
 	uint64_t port_info_all;
 	struct spa_port_info port_info;
-	struct spa_param_info port_params[8];
+#define PORT_EnumFormat		0
+#define PORT_Meta		1
+#define PORT_IO			2
+#define PORT_Format		3
+#define PORT_Buffers		4
+#define PORT_Latency		5
+#define N_PORT_PARAMS		6
+	struct spa_param_info port_params[N_PORT_PARAMS];
+	enum spa_direction port_direction;
 	struct spa_io_buffers *io;
 	struct spa_io_clock *clock;
 	struct spa_io_position *position;
@@ -168,6 +184,11 @@ struct state {
 	unsigned int use_mmap:1;
 	unsigned int planar:1;
 	unsigned int freewheel:1;
+	unsigned int open_ucm:1;
+	unsigned int is_iec958:1;
+	unsigned int is_hdmi:1;
+
+	uint64_t iec958_codecs;
 
 	int64_t sample_count;
 
@@ -180,6 +201,11 @@ struct state {
 
 	struct spa_dll dll;
 	double max_error;
+
+	struct spa_latency_info latency[2];
+	struct spa_process_latency_info process_latency;
+
+	snd_use_case_mgr_t *ucm;
 };
 
 int
@@ -188,6 +214,9 @@ spa_alsa_enum_format(struct state *state, int seq,
 		     const struct spa_pod *filter);
 
 int spa_alsa_set_format(struct state *state, struct spa_audio_info *info, uint32_t flags);
+
+int spa_alsa_init(struct state *state);
+int spa_alsa_clear(struct state *state);
 
 int spa_alsa_open(struct state *state);
 int spa_alsa_start(struct state *state);
@@ -235,6 +264,46 @@ static inline void spa_alsa_parse_position(struct channel_map *map, const char *
 	    map->channels < SPA_AUDIO_MAX_CHANNELS) {
 		map->pos[map->channels++] = spa_alsa_channel_from_name(v);
 	}
+}
+
+static inline uint32_t spa_alsa_iec958_codec_from_name(const char *name)
+{
+	int i;
+	for (i = 0; spa_type_audio_iec958_codec[i].name; i++) {
+		if (strcmp(name, spa_debug_type_short_name(spa_type_audio_iec958_codec[i].name)) == 0)
+			return spa_type_audio_iec958_codec[i].type;
+	}
+	return SPA_AUDIO_IEC958_CODEC_UNKNOWN;
+}
+
+static inline void spa_alsa_parse_iec958_codecs(uint64_t *codecs, const char *val, size_t len)
+{
+	struct spa_json it[2];
+	char v[256];
+
+	spa_json_init(&it[0], val, len);
+        if (spa_json_enter_array(&it[0], &it[1]) <= 0)
+                spa_json_init(&it[1], val, len);
+
+	*codecs = 0;
+	while (spa_json_get_string(&it[1], v, sizeof(v)) > 0)
+		*codecs |= 1ULL << spa_alsa_iec958_codec_from_name(v);
+}
+
+static inline uint32_t spa_alsa_get_iec958_codecs(struct state *state, uint32_t *codecs,
+		uint32_t max_codecs)
+{
+	uint64_t mask = state->iec958_codecs;
+	uint32_t i = 0, j = 0;
+	if (!(state->is_iec958 || state->is_hdmi))
+		return 0;
+	while (mask && i < max_codecs) {
+		if (mask & 1)
+			codecs[i++] = j;
+		mask >>= 1;
+		j++;
+	}
+	return i;
 }
 
 #ifdef __cplusplus

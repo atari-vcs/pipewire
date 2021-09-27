@@ -98,7 +98,11 @@ enum acp_channel {
 	ACP_CHANNEL_BC,			/**< bottom center */
 	ACP_CHANNEL_BLC,		/**< bottom left center */
 	ACP_CHANNEL_BRC,		/**< bottom right center */
-	ACP_CHANNEL_CUSTOM_START  = 0x10000,
+
+	ACP_CHANNEL_START_Aux  = 0x1000,
+	ACP_CHANNEL_LAST_Aux  = 0x1fff,
+
+	ACP_CHANNEL_START_Custom  = 0x10000,
 };
 
 char *acp_channel_str(char *buf, size_t len, enum acp_channel ch);
@@ -204,6 +208,7 @@ struct acp_device {
 #define ACP_DEVICE_ACTIVE	(1<<0)
 #define ACP_DEVICE_HW_VOLUME	(1<<1)
 #define ACP_DEVICE_HW_MUTE	(1<<2)
+#define ACP_DEVICE_UCM_DEVICE	(1<<3)
 	uint32_t flags;
 
 	const char *name;
@@ -220,6 +225,8 @@ struct acp_device {
 
 	uint32_t n_ports;
 	struct acp_port **ports;
+
+	int64_t latency_ns;
 };
 
 struct acp_card_profile {

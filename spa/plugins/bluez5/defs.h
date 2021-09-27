@@ -60,8 +60,6 @@ extern "C" {
 
 #define PIPEWIRE_BATTERY_PROVIDER "/org/freedesktop/pipewire/battery"
 
-#define SPA_BT_HFP_HF_IPHONEACCEV_KEY_BATTERY	1
-
 #define MIN_LATENCY	512
 #define MAX_LATENCY	1024
 
@@ -154,6 +152,12 @@ extern "C" {
 
 #define HSP_HS_DEFAULT_CHANNEL  3
 
+#define SOURCE_ID_BLUETOOTH	0x1	/* Bluetooth SIG */
+#define SOURCE_ID_USB		0x2	/* USB Implementer's Forum */
+
+#define BUS_TYPE_USB		1
+#define BUS_TYPE_OTHER		255
+
 #define HFP_AUDIO_CODEC_CVSD    0x01
 #define HFP_AUDIO_CODEC_MSBC    0x02
 
@@ -169,6 +173,7 @@ extern "C" {
  * of the input (number of PCM samples) and output is known up front. */
 #define MSBC_DECODED_SIZE       240
 #define MSBC_ENCODED_SIZE       60  /* 2 bytes header + 57 mSBC payload + 1 byte padding */
+#define MSBC_PAYLOAD_SIZE       57
 
 enum spa_bt_profile {
 	SPA_BT_PROFILE_NULL =		0,
@@ -205,6 +210,10 @@ static inline enum spa_bt_profile spa_bt_profile_from_uuid(const char *uuid)
 		return 0;
 }
 int spa_bt_profiles_from_json_array(const char *str);
+
+int spa_bt_format_vendor_product_id(uint16_t source_id, uint16_t vendor_id,
+		uint16_t product_id, char *vendor_str, int vendor_str_size,
+		char *product_str, int product_str_size);
 
 enum spa_bt_hfp_ag_feature {
 	SPA_BT_HFP_AG_FEATURE_NONE =			(0),
@@ -244,6 +253,29 @@ enum spa_bt_hfp_hf_feature {
 	SPA_BT_HFP_HF_FEATURE_CODEC_NEGOTIATION =	(1 << 7),
 	SPA_BT_HFP_HF_FEATURE_HF_INDICATORS =		(1 << 8),
 	SPA_BT_HFP_HF_FEATURE_ESCO_S4 =			(1 << 9),
+};
+
+/* https://btprodspecificationrefs.blob.core.windows.net/assigned-numbers/Assigned%20Number%20Types/Hands-Free%20Profile.pdf */
+enum spa_bt_hfp_hf_indicator {
+	SPA_BT_HFP_HF_INDICATOR_ENHANCED_SAFETY =        1,
+	SPA_BT_HFP_HF_INDICATOR_BATTERY_LEVEL =          2,
+};
+
+/* HFP Command AT+IPHONEACCEV
+ *  https://developer.apple.com/accessories/Accessory-Design-Guidelines.pdf */
+enum spa_bt_hfp_hf_iphoneaccev_keys {
+	SPA_BT_HFP_HF_IPHONEACCEV_KEY_BATTERY_LEVEL =    1,
+	SPA_BT_HFP_HF_IPHONEACCEV_KEY_DOCK_STATE =       2,
+};
+
+/* HFP Command AT+XAPL
+ *  https://developer.apple.com/accessories/Accessory-Design-Guidelines.pdf
+ * Bits 0, 5 and above are reserved. */
+enum spa_bt_hfp_hf_xapl_features {
+	SPA_BT_HFP_HF_XAPL_FEATURE_BATTERY_REPORTING =         (1 << 1),
+	SPA_BT_HFP_HF_XAPL_FEATURE_DOCKED_OR_POWERED =         (1 << 2),
+	SPA_BT_HFP_HF_XAPL_FEATURE_SIRI_STATUS_REPORTING =     (1 << 3),
+	SPA_BT_HFP_HF_XAPL_FEATURE_NOISE_REDUCTION_REPORTING = (1 << 4),
 };
 
 enum spa_bt_hfp_sdp_hf_features {
@@ -290,6 +322,11 @@ struct spa_bt_adapter {
 	char *alias;
 	char *address;
 	char *name;
+	int bus_type;
+	uint16_t source_id;
+	uint16_t vendor_id;
+	uint16_t product_id;
+	uint16_t version_id;
 	uint32_t bluetooth_class;
 	uint32_t profiles;
 	int powered;
@@ -405,6 +442,10 @@ struct spa_bt_device {
 	char *battery_path;
 	char *name;
 	char *icon;
+	uint16_t source_id;
+	uint16_t vendor_id;
+	uint16_t product_id;
+	uint16_t version_id;
 	uint32_t bluetooth_class;
 	uint16_t appearance;
 	uint16_t RSSI;
@@ -441,9 +482,10 @@ struct a2dp_codec;
 
 struct spa_bt_device *spa_bt_device_find(struct spa_bt_monitor *monitor, const char *path);
 struct spa_bt_device *spa_bt_device_find_by_address(struct spa_bt_monitor *monitor, const char *remote_address, const char *local_address);
+int spa_bt_device_add_profile(struct spa_bt_device *device, enum spa_bt_profile profile);
 int spa_bt_device_connect_profile(struct spa_bt_device *device, enum spa_bt_profile profile);
 int spa_bt_device_check_profiles(struct spa_bt_device *device, bool force);
-int spa_bt_device_ensure_a2dp_codec(struct spa_bt_device *device, const struct a2dp_codec **codecs);
+int spa_bt_device_ensure_a2dp_codec(struct spa_bt_device *device, const struct a2dp_codec * const *codecs);
 bool spa_bt_device_supports_a2dp_codec(struct spa_bt_device *device, const struct a2dp_codec *codec);
 const struct a2dp_codec **spa_bt_device_get_supported_a2dp_codecs(struct spa_bt_device *device, size_t *count);
 int spa_bt_device_ensure_hfp_codec(struct spa_bt_device *device, unsigned int codec);
@@ -463,7 +505,7 @@ int spa_bt_device_report_battery_level(struct spa_bt_device *device, uint8_t per
 
 struct spa_bt_sco_io;
 
-struct spa_bt_sco_io *spa_bt_sco_io_create(struct spa_loop *data_loop, int fd, uint16_t write_mtu, uint16_t read_mtu);
+struct spa_bt_sco_io *spa_bt_sco_io_create(struct spa_loop *data_loop, int fd, uint16_t read_mtu, uint16_t write_mtu);
 void spa_bt_sco_io_destroy(struct spa_bt_sco_io *io);
 void spa_bt_sco_io_set_source_cb(struct spa_bt_sco_io *io, int (*source_cb)(void *userdata, uint8_t *data, int size), void *userdata);
 void spa_bt_sco_io_set_sink_cb(struct spa_bt_sco_io *io, int (*sink_cb)(void *userdata), void *userdata);
@@ -488,6 +530,7 @@ struct spa_bt_transport_events {
 	uint32_t version;
 
 	void (*destroy) (void *data);
+	void (*delay_changed) (void *data);
 	void (*state_changed) (void *data, enum spa_bt_transport_state old,
 			enum spa_bt_transport_state state);
 	void (*volume_changed) (void *data);
@@ -568,6 +611,7 @@ int spa_bt_transport_ensure_sco_io(struct spa_bt_transport *t, struct spa_loop *
 								struct spa_bt_transport_events,	\
 								m, v, ##__VA_ARGS__)
 #define spa_bt_transport_emit_destroy(t)		spa_bt_transport_emit(t, destroy, 0)
+#define spa_bt_transport_emit_delay_changed(t)		spa_bt_transport_emit(t, delay_changed, 0)
 #define spa_bt_transport_emit_state_changed(t,...)	spa_bt_transport_emit(t, state_changed, 0, __VA_ARGS__)
 #define spa_bt_transport_emit_volume_changed(t)		spa_bt_transport_emit(t, volume_changed, 0)
 
@@ -603,46 +647,47 @@ static inline enum spa_bt_transport_state spa_bt_transport_state_from_string(con
 
 #define DEFAULT_AG_VOLUME	1.0f
 #define DEFAULT_RX_VOLUME	1.0f
-#define DEFAULT_TX_VOLUME	0.064f /* pa_sw_volume_to_linear(0.4 * PA_VOLUME_NORM) */
+#define DEFAULT_TX_VOLUME	0.064f /* spa_bt_volume_hw_to_linear(40, 100) */
 
-#define PA_VOLUME_MUTED	((uint32_t) 0u)
-#define PA_VOLUME_NORM	((uint32_t) 0x10000u)
-#define PA_VOLUME_MAX	((uint32_t) UINT32_MAX/2)
-
-static inline uint32_t pa_sw_volume_from_linear(double v)
-{
-    	if (v <= 0.0)
-        	return PA_VOLUME_MUTED;
-    	return SPA_CLAMP(
-	    	(uint64_t) lround(cbrt(v) * PA_VOLUME_NORM),
-		PA_VOLUME_MUTED, PA_VOLUME_MAX);
-}
-
-static inline double pa_sw_volume_to_linear(uint32_t v)
-{
-	double f;
-	if (v <= PA_VOLUME_MUTED)
-		return 0.0;
-	if (v == PA_VOLUME_NORM)
-		return 1.0;
-	f = ((double) v / PA_VOLUME_NORM);
-	return f*f*f;
-}
-
-/* AVRCP/HSP volume is considered as percentage, so map it to pulseaudio volume. */
+/* AVRCP/HSP volume is considered as percentage, so map it to pulseaudio (cubic) volume. */
 static inline uint32_t spa_bt_volume_linear_to_hw(double v, uint32_t hw_volume_max)
 {
-	return SPA_CLAMP(
-		pa_sw_volume_from_linear(v) * hw_volume_max / PA_VOLUME_NORM,
-		0u, hw_volume_max);
+	if (v <= 0.0)
+		return 0;
+	if (v >= 1.0)
+		return hw_volume_max;
+	return SPA_CLAMP((uint64_t) lround(cbrt(v) * hw_volume_max),
+			 0u, hw_volume_max);
 }
 
 static inline double spa_bt_volume_hw_to_linear(uint32_t v, uint32_t hw_volume_max)
 {
-	return SPA_CLAMP(
-		pa_sw_volume_to_linear(v * PA_VOLUME_NORM / hw_volume_max),
-		0.0, 1.0);
+	double f;
+	if (v <= 0)
+		return 0.0;
+	if (v >= hw_volume_max)
+		return 1.0;
+	f = ((double) v / hw_volume_max);
+	return f * f * f;
 }
+
+enum spa_bt_feature {
+	SPA_BT_FEATURE_MSBC		= (1 << 0),
+	SPA_BT_FEATURE_MSBC_ALT1	= (1 << 1),
+	SPA_BT_FEATURE_MSBC_ALT1_RTL	= (1 << 2),
+	SPA_BT_FEATURE_HW_VOLUME	= (1 << 3),
+	SPA_BT_FEATURE_HW_VOLUME_MIC	= (1 << 4),
+	SPA_BT_FEATURE_SBC_XQ		= (1 << 5),
+};
+
+struct spa_bt_quirks;
+
+struct spa_bt_quirks *spa_bt_quirks_create(const struct spa_dict *info, struct spa_log *log);
+int spa_bt_quirks_get_features(const struct spa_bt_quirks *quirks,
+		const struct spa_bt_adapter *adapter,
+		const struct spa_bt_device *device,
+		uint32_t *features);
+void spa_bt_quirks_destroy(struct spa_bt_quirks *quirks);
 
 struct spa_bt_backend_implementation {
 #define SPA_VERSION_BT_BACKEND_IMPLEMENTATION	0
@@ -685,6 +730,7 @@ struct spa_bt_backend {
 static inline struct spa_bt_backend *dummy_backend_new(struct spa_bt_monitor *monitor,
 		void *dbus_connection,
 		const struct spa_dict *info,
+		const struct spa_bt_quirks *quirks,
 		const struct spa_support *support,
 		uint32_t n_support)
 {
@@ -695,6 +741,7 @@ static inline struct spa_bt_backend *dummy_backend_new(struct spa_bt_monitor *mo
 struct spa_bt_backend *backend_native_new(struct spa_bt_monitor *monitor,
 		void *dbus_connection,
 		const struct spa_dict *info,
+		const struct spa_bt_quirks *quirks,
 		const struct spa_support *support,
 		uint32_t n_support);
 #else
@@ -706,6 +753,7 @@ struct spa_bt_backend *backend_native_new(struct spa_bt_monitor *monitor,
 struct spa_bt_backend *backend_ofono_new(struct spa_bt_monitor *monitor,
 		void *dbus_connection,
 		const struct spa_dict *info,
+		const struct spa_bt_quirks *quirks,
 		const struct spa_support *support,
 		uint32_t n_support);
 #else
@@ -717,6 +765,7 @@ struct spa_bt_backend *backend_ofono_new(struct spa_bt_monitor *monitor,
 struct spa_bt_backend *backend_hsphfpd_new(struct spa_bt_monitor *monitor,
 		void *dbus_connection,
 		const struct spa_dict *info,
+		const struct spa_bt_quirks *quirks,
 		const struct spa_support *support,
 		uint32_t n_support);
 #else

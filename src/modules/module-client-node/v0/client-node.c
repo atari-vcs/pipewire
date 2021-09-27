@@ -482,8 +482,7 @@ do_update_port(struct node *this,
 	}
 
 	if (change_mask & PW_CLIENT_NODE0_PORT_UPDATE_INFO) {
-		if (port->properties)
-			pw_properties_free(port->properties);
+		pw_properties_free(port->properties);
 		port->properties = NULL;
 		port->info.props = NULL;
 		port->info.n_params = 0;
@@ -1096,7 +1095,7 @@ static void client_node0_event(void *data, struct spa_event *event)
 	}
 }
 
-static struct pw_client_node0_methods client_node0_methods = {
+static const struct pw_client_node0_methods client_node0_methods = {
 	PW_VERSION_CLIENT_NODE0_METHODS,
 	.done = client_node0_done,
 	.update = client_node0_update,
@@ -1304,12 +1303,13 @@ static const struct pw_resource_events resource_events = {
 
 static void convert_properties(struct pw_properties *properties)
 {
-	struct {
+	static const struct {
 		const char *from, *to;
 	} props[] = {
 		{ "pipewire.autoconnect", PW_KEY_NODE_AUTOCONNECT, },
 		{ "pipewire.target.node", PW_KEY_NODE_TARGET, }
 	};
+
 	uint32_t i;
 	const char *str;
 

@@ -25,18 +25,13 @@
 #include <pipewire/pipewire.h>
 
 #include "../module.h"
+#include "../pulse-server.h"
+#include "../server.h"
 #include "registry.h"
-
-#define ERROR_RETURN(str) 		\
-	{ 				\
-		pw_log_error(str); 	\
-		res = -EINVAL; 		\
-		goto out; 		\
-	}
 
 struct module_native_protocol_tcp_data {
 	struct module *module;
-	struct server *server;
+	struct pw_array servers;
 };
 
 static int module_native_protocol_tcp_load(struct client *client, struct module *module)
@@ -44,26 +39,29 @@ static int module_native_protocol_tcp_load(struct client *client, struct module 
 	struct module_native_protocol_tcp_data *data = module->user_data;
 	struct impl *impl = client->impl;
 	const char *address;
+	int res;
 
 	if ((address = pw_properties_get(module->props, "pulse.tcp")) == NULL)
 		return -EIO;
 
-	if ((data->server = create_server(impl, address)) == NULL)
-		return -errno;
+	pw_array_init(&data->servers, sizeof(struct server *));
 
-	pw_log_info("loaded module %p id:%u name:%s", module, module->idx, module->name);
-	module_emit_loaded(module, 0);
+	res = servers_create_and_start(impl, address, &data->servers);
+	if (res < 0)
+		return res;
+
 	return 0;
 }
 
 static int module_native_protocol_tcp_unload(struct client *client, struct module *module)
 {
 	struct module_native_protocol_tcp_data *d = module->user_data;
+	struct server **s;
 
-	pw_log_info("unload module %p id:%u name:%s", module, module->idx, module->name);
+	pw_array_for_each (s, &d->servers)
+		server_free(*s);
 
-	if (d->server != NULL)
-		server_free(d->server);
+	pw_array_clear(&d->servers);
 
 	return 0;
 }
@@ -99,11 +97,12 @@ struct module *create_module_native_protocol_tcp(struct impl *impl, const char *
 		module_args_add_props(props, argument);
 
 	if ((port = pw_properties_get(props, "port")) == NULL)
-		port = "4713";
+		port = SPA_STRINGIFY(PW_PROTOCOL_PULSE_DEFAULT_PORT);
+
 	listen = pw_properties_get(props, "listen");
 
-	pw_properties_setf(props, "pulse.tcp", "tcp:%s%s%s",
-			listen ? listen : "", listen ? ":" : "", port);
+	pw_properties_setf(props, "pulse.tcp", "[ \"tcp:%s%s%s\" ]",
+			   listen ? listen : "", listen ? ":" : "", port);
 
 	module = module_new(impl, &module_native_protocol_tcp_methods, sizeof(*d));
 	if (module == NULL) {
@@ -117,8 +116,7 @@ struct module *create_module_native_protocol_tcp(struct impl *impl, const char *
 
 	return module;
 out:
-	if (props)
-		pw_properties_free(props);
+	pw_properties_free(props);
 	errno = -res;
 	return NULL;
 }

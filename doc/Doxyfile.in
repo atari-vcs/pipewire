@@ -14,6 +14,7 @@ QUIET                  = YES
 WARN_NO_PARAMDOC       = YES
 INPUT                  = @inputs@
 FILE_PATTERNS          = "*.h" "*.c"
+RECURSIVE              = YES
 EXAMPLE_PATH           = "@top_srcdir@/src/tools" \
                          "@top_srcdir@/src/examples"
 
@@ -29,4 +30,13 @@ GENERATE_LATEX         = NO
 MACRO_EXPANSION        = YES
 EXPAND_ONLY_PREDEF     = YES
 PREDEFINED             = PA_C_DECL_BEGIN= \
-                         PA_C_DECL_END=
+                         PA_C_DECL_END= \
+			 __USE_ISOC11 \
+			 SPA_EXPORT \
+			 SPA_PRINTF_FUNC \
+			 SPA_DEPRECATED \
+			 SPA_SENTINEL \
+			 SPA_UNUSED \
+			 SPA_NORETURN \
+			 SPA_RESTRICT
+HTML_EXTRA_STYLESHEET  = @cssfiles@

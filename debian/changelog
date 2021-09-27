@@ -1,9 +1,95 @@
-pipewire (0.3.28-1+apertis1atari1) atari; urgency=medium
+pipewire (0.3.34-1+apertis1atari1) atari; urgency=medium
 
   * Remaining atari changes:
     * Disable ldac support; pulls in too many dependencies
 
- -- Christopher Obbard <chris.obbard@collabora.com>  Thu, 27 May 2021 15:56:42 +0100
+ -- Christopher Obbard <chris.obbard@collabora.com>  Thu, 02 Sep 2021 12:44:50 +0100
+
+pipewire (0.3.34-1+apertis1) apertis; urgency=medium
+
+  * Sync updates from Debian Bookworm. Remaining Apertis specific changes:
+    - Continue to disable build-depends:
+      - libsdl2 (not needed)
+      - libjack-jackd2-dev (not needed)
+    - Add apparmor rules
+
+ -- Dylan Aïssi <dylan.aissi@collabora.com>  Tue, 31 Aug 2021 12:16:09 +0200
+
+pipewire (0.3.34-1) unstable; urgency=medium
+
+  * Team upload.
+  * New upstream release
+  * Don't install sink-convolver.conf (filter-chain example configuration)
+  * Update symbols file
+
+ -- Dylan Aïssi <daissi@debian.org>  Thu, 26 Aug 2021 20:53:42 +0200
+
+pipewire (0.3.33-1) unstable; urgency=medium
+
+  * Team upload.
+  * New upstream release
+  * Disable aptX support for now, upstream has switched
+     from libopenaptx to libfreeaptx (not yet in Debian)
+  * Upload to unstable as Bullseye was released.
+
+ -- Dylan Aïssi <daissi@debian.org>  Mon, 16 Aug 2021 11:44:56 +0200
+
+pipewire (0.3.32-1+apertis2) apertis; urgency=medium
+
+  [ Frederic Danis ]
+  * Refresh the automatically detected licensing information
+
+  [ Frédéric Danis ]
+  * Fix AppArmor rules for AMD64 targets
+
+ -- Frédéric Danis <frederic.danis@collabora.com>  Thu, 05 Aug 2021 09:10:05 +0200
+
+pipewire (0.3.32-1+apertis1) apertis; urgency=medium
+
+  * Sync updates from Debian Experimental
+    Remove merged patches
+
+ -- Ritesh Raj Sarraf <ritesh.sarraf@collabora.com>  Tue, 27 Jul 2021 18:39:12 +0530
+
+pipewire (0.3.32-1) experimental; urgency=medium
+
+  * Team upload.
+  * New upstream release
+  * Update symbols file
+
+ -- Dylan Aïssi <daissi@debian.org>  Wed, 21 Jul 2021 12:14:03 +0200
+
+pipewire (0.3.31-1) experimental; urgency=medium
+
+  * Team upload.
+  * New upstream release
+  * Add libusb-1.0-0-dev to Build-Depends
+  * Disable roc module at least for now
+  * Install bluez-hardware.conf in pipewire-media-session
+  * Update symbols file
+
+ -- Dylan Aïssi <daissi@debian.org>  Tue, 29 Jun 2021 12:09:29 +0200
+
+pipewire (0.3.30-1) experimental; urgency=medium
+
+  * Team upload.
+  * New upstream release
+  * Remove d/p/Let-pipewire-pulse-services-conflict-with-their-pulseaudi.patch,
+      applied upstream.
+  * Add libwebrtc-audio-processing-dev to Build-Depends
+  * Update symbols file
+  * Remove unused lintian override in pipewire-audio-client-libraries
+
+ -- Dylan Aïssi <daissi@debian.org>  Wed, 16 Jun 2021 12:07:16 +0200
+
+pipewire (0.3.28-1+apertis2) apertis; urgency=medium
+
+  * d/patches: Fix flatpak support
+  * Prepare AppArmor rule to support future protected clients
+  * Add PTrace capability in pipewire-pulse AppArmor rule
+  * Fix AppArmor rule for access from Flatpak container
+
+ -- Frédéric Danis <frederic.danis@collabora.com>  Fri, 04 Jun 2021 11:32:21 +0200
 
 pipewire (0.3.28-1+apertis1) apertis; urgency=medium
 
@@ -143,6 +229,15 @@ pipewire (0.3.22-1) experimental; urgency=medium
     - Install new confiration file (bluez, v4l and client config)
 
  -- Sjoerd Simons <sjoerd@debian.org>  Sat, 20 Feb 2021 21:50:40 +0100
+
+pipewire (0.3.19-4) unstable; urgency=medium
+
+  * Team upload
+  * Disable GStreamer device provider.
+    Apparently it isn't ready, and breaks video recording in cheese.
+    Thanks to Fedora (see also Red Hat bug 1884260). (Closes: #982636)
+
+ -- Simon McVittie <smcv@debian.org>  Sat, 13 Feb 2021 10:49:02 +0000
 
 pipewire (0.3.19-3) unstable; urgency=medium
 
